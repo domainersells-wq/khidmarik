@@ -1,0 +1,291 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { CalendarClock, Info, MapPin, DollarSign, Users, Camera, Layout, Tag, Percent } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+
+export default function ListNewBanquetHallPage() {
+    const router = useRouter();
+    const [hallName, setHallName] = useState("");
+    const [description, setDescription] = useState("");
+    const [location, setLocation] = useState("");
+    const [capacity, setCapacity] = useState("");
+    const [pricePerDay, setPricePerDay] = useState("");
+    const [contactEmail, setContactEmail] = useState("");
+    const [contactPhone, setContactPhone] = useState("");
+    const [photos, setPhotos] = useState<string[]>([]);
+    const [panoramicViewLink, setPanoramicViewLink] = useState("");
+    const [floorPlanLink, setFloorPlanLink] = useState("");
+    const [availableEquipment, setAvailableEquipment] = useState<string[]>([]);
+    const [eventTypes, setEventTypes] = useState<string[]>([]);
+    const [seasonalOffer, setSeasonalOffer] = useState("");
+    const [discountCode, setDiscountCode] = useState("");
+
+    const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            const filesArray = Array.from(e.target.files).map(file => URL.createObjectURL(file));
+            setPhotos(prevPhotos => [...prevPhotos, ...filesArray]);
+        }
+    };
+
+    const handleEquipmentChange = (equipment: string) => {
+        setAvailableEquipment(prev =>
+            prev.includes(equipment) ? prev.filter(item => item !== equipment) : [...prev, equipment]
+        );
+    };
+
+    const handleEventTypeChange = (type: string) => {
+        setEventTypes(prev =>
+            prev.includes(type) ? prev.filter(item => item !== type) : [...prev, type]
+        );
+    };
+
+    const handleSubmit = (e: React.FormEvent) => {
+        e.preventDefault();
+        // Here, you would typically send this data to your backend
+        console.log({
+            hallName,
+            description,
+            location,
+            capacity,
+            pricePerDay,
+            contactEmail,
+            contactPhone,
+            photos,
+            panoramicViewLink,
+            floorPlanLink,
+            availableEquipment,
+            eventTypes,
+            seasonalOffer,
+            discountCode,
+        });
+        // Simulate successful listing and redirect
+        alert("Banquet Hall listed successfully!");
+        router.push("/banquet-halls");
+    };
+
+    return (
+        <div className="container mx-auto py-8 px-4">
+            <h1 className="text-4xl font-bold mb-8 text-center font-headline">List Your Banquet or Wedding Hall</h1>
+
+            <form onSubmit={handleSubmit} className="space-y-8">
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-2xl font-semibold flex items-center">
+                            <Info className="mr-2 h-6 w-6 text-primary" /> Basic Information
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div>
+                            <Label htmlFor="hallName">Hall Name</Label>
+                            <Input
+                                id="hallName"
+                                value={hallName}
+                                onChange={(e) => setHallName(e.target.value)}
+                                placeholder="E.g., Grand Ballroom, Royal Palace Hall"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="description">Description</Label>
+                            <Textarea
+                                id="description"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                placeholder="Describe your hall, its ambiance, and what makes it special."
+                                rows={5}
+                                required
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="location">Location</Label>
+                            <Input
+                                id="location"
+                                value={location}
+                                onChange={(e) => setLocation(e.target.value)}
+                                placeholder="E.g., Algiers, City Center"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="capacity">Capacity (Number of Guests)</Label>
+                            <Input
+                                id="capacity"
+                                type="number"
+                                value={capacity}
+                                onChange={(e) => setCapacity(e.target.value)}
+                                placeholder="E.g., 200, 500"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="pricePerDay">Price Per Day (DZD)</Label>
+                            <Input
+                                id="pricePerDay"
+                                type="number"
+                                value={pricePerDay}
+                                onChange={(e) => setPricePerDay(e.target.value)}
+                                placeholder="E.g., 150000"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="contactEmail">Contact Email</Label>
+                            <Input
+                                id="contactEmail"
+                                type="email"
+                                value={contactEmail}
+                                onChange={(e) => setContactEmail(e.target.value)}
+                                placeholder="contact@yourhall.com"
+                                required
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="contactPhone">Contact Phone</Label>
+                            <Input
+                                id="contactPhone"
+                                type="tel"
+                                value={contactPhone}
+                                onChange={(e) => setContactPhone(e.target.value)}
+                                placeholder="+213 XXXXXXXX"
+                                required
+                            />
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-2xl font-semibold flex items-center">
+                            <Camera className="mr-2 h-6 w-6 text-primary" /> Visual Presentation
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div>
+                            <Label htmlFor="photos">Upload Photos</Label>
+                            <Input
+                                id="photos"
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                onChange={handlePhotoUpload}
+                            />
+                            <div className="mt-2 grid grid-cols-3 gap-2">
+                                {photos.map((photo, index) => (
+                                    <img key={index} src={photo} alt={`Hall Photo ${index + 1}`} className="w-full h-24 object-cover rounded-md" />
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <Label htmlFor="panoramicViewLink">360-degree Panoramic View Link (Optional)</Label>
+                            <Input
+                                id="panoramicViewLink"
+                                value={panoramicViewLink}
+                                onChange={(e) => setPanoramicViewLink(e.target.value)}
+                                placeholder="Link to your 360-degree tour (e.g., Google Street View, custom embed)"
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="floorPlanLink">Floor Plan Link (Optional)</Label>
+                            <Input
+                                id="floorPlanLink"
+                                value={floorPlanLink}
+                                onChange={(e) => setFloorPlanLink(e.target.value)}
+                                placeholder="Link to your floor plan image or PDF"
+                            />
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-2xl font-semibold flex items-center">
+                            <Layout className="mr-2 h-6 w-6 text-primary" /> Hall Specifics
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div>
+                            <Label>Available Equipment</Label>
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                                {["Sound System", "Lighting", "Projector", "Tables & Chairs", "Stage", "Kitchen Access", "Parking"].map(
+                                    (equipment) => (
+                                        <div key={equipment} className="flex items-center space-x-2">
+                                            <Checkbox
+                                                id={equipment}
+                                                checked={availableEquipment.includes(equipment)}
+                                                onCheckedChange={() => handleEquipmentChange(equipment)}
+                                            />
+                                            <Label htmlFor={equipment}>{equipment}</Label>
+                                        </div>
+                                    )
+                                )}
+                            </div>
+                        </div>
+                        <div>
+                            <Label>Suitable Event Types</Label>
+                            <div className="grid grid-cols-2 gap-2 mt-2">
+                                {["Wedding", "Engagement", "Birthday", "Corporate Event", "Conference", "Graduation Party"].map(
+                                    (type) => (
+                                        <div key={type} className="flex items-center space-x-2">
+                                            <Checkbox
+                                                id={type}
+                                                checked={eventTypes.includes(type)}
+                                                onCheckedChange={() => handleEventTypeChange(type)}
+                                            />
+                                            <Label htmlFor={type}>{type}</Label>
+                                        </div>
+                                    )
+                                )}
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="text-2xl font-semibold flex items-center">
+                            <Percent className="mr-2 h-6 w-6 text-primary" /> Marketing & Incentives (Optional)
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div>
+                            <Label htmlFor="seasonalOffer">Seasonal Offer Description</Label>
+                            <Input
+                                id="seasonalOffer"
+                                value={seasonalOffer}
+                                onChange={(e) => setSeasonalOffer(e.target.value)}
+                                placeholder="E.g., 10% off for bookings in Q4"
+                            />
+                        </div>
+                        <div>
+                            <Label htmlFor="discountCode">Discount Code/Coupon</Label>
+                            <Input
+                                id="discountCode"
+                                value={discountCode}
+                                onChange={(e) => setDiscountCode(e.target.value)}
+                                placeholder="E.g., SUMMER2024 (for specific promotions)"
+                            />
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <Button type="submit" className="w-full py-6 text-lg font-semibold">List My Banquet Hall</Button>
+            </form>
+
+            <div className="mt-8 p-3 bg-blue-50 border border-blue-200 rounded-md text-blue-700 text-sm flex items-start gap-2">
+                <Info className="h-5 w-5 mt-0.5 shrink-0" />
+                <div>
+                    <span className="font-semibold">Important Note:</span> Ensure all information is accurate to provide the best experience for potential customers and avoid discrepancies.
+                </div>
+            </div>
+        </div>
+    );
+}

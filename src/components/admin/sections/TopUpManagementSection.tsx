@@ -65,6 +65,7 @@ export function TopUpManagementSection() {
     title?: string;
   } | null>(null);
   const [previewDisplayUrl, setPreviewDisplayUrl] = useState<string | null>(null);
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
 
   const isPdfFile = (url?: string, fileName?: string) => {
     if (!url && !fileName) return false;
@@ -346,8 +347,11 @@ export function TopUpManagementSection() {
       const result = financialService.approveTopUpRequest(req.id, 'Admin Finance Desk', adminApprovalNotes);
       if (result.success) {
         toast({
-          title: 'تم اعتماد شحن الرصيد بنجاح! ✅',
-          description: `تم إضافة ${req.amount.toLocaleString()} DA لحساب ${req.userName} وتوثيق القيد المالي.`,
+          title: 'تم اعتماد شحن الرصيد بنجاح',
+          description: `تم إضافة المبلغ لحساب ${req.userName} وتوثيق القيد المالي:`,
+          amount: `${req.amount.toLocaleString()} DA`,
+          cardVariant: 'balance',
+          timestampText: 'الآن',
         });
         loadRequests();
         setIsDetailOpen(false);
@@ -752,6 +756,35 @@ export function TopUpManagementSection() {
                     <span className="text-muted-foreground block text-[11px]">طريقة الدفع:</span>
                     <strong className="text-foreground uppercase">{selectedRequest.paymentMethod}</strong>
                   </div>
+                  {/* Highlight resubmitted postal transaction code if user replied */}
+                  {selectedRequest.userResubmittedPostalCode && (
+                    <div className="col-span-2 p-3.5 rounded-xl bg-blue-500/10 border-2 border-blue-500/40 space-y-1.5 animate-pulse-once">
+                      <div className="flex items-center justify-between">
+                        <span className="text-blue-700 dark:text-blue-300 block text-[11px] font-black flex items-center gap-1.5">
+                          <Sparkles className="h-4 w-4 text-blue-500" />
+                          رقم العملية المعاد إرساله من قِبل العميل (مُحدَّث):
+                        </span>
+                        <Badge className="bg-blue-600 text-white text-[10px] px-2 py-0.5">مُعاد إرساله حديثاً</Badge>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <strong className="text-blue-700 dark:text-blue-200 font-mono text-base font-black px-3 py-1.5 bg-background rounded-lg border border-blue-500/30" dir="ltr">
+                          {selectedRequest.userResubmittedPostalCode}
+                        </strong>
+                        <Button
+                          size="sm"
+                          variant="default"
+                          onClick={() => handleCopyCode(selectedRequest.userResubmittedPostalCode!)}
+                          className="h-8 text-xs font-bold gap-1 rounded-xl bg-blue-600 hover:bg-blue-700 text-white"
+                        >
+                          {copiedDetailCode ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                          <span>{copiedDetailCode ? 'تم النسخ' : 'نسخ الكود الجديد'}</span>
+                        </Button>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        * هذا هو الرمز الجديد الذي أدخله العميل استجابةً لطلب التوضيح والمطابقة.
+                      </p>
+                    </div>
+                  )}
                   <div className="col-span-2 p-3 rounded-xl bg-background border border-primary/30 space-y-1.5">
                     <span className="text-muted-foreground block text-[11px] font-bold">
                       رمز العملية البريدية أو التحويل البنكي (N° de transaction):
@@ -865,12 +898,40 @@ export function TopUpManagementSection() {
                         </Button>
                       </div>
                     </div>
+                  ) : failedImages[selectedRequest.receiptUrl] ? (
+                    <div className="p-4 bg-muted/40 rounded-xl border border-border text-center space-y-2">
+                      <div className="text-xs font-bold text-foreground">وصل التحويل الأصلي (صورة مخزنة)</div>
+                      <p className="text-[11px] text-muted-foreground">تعذر عرض الصورة المصغرة في المتصفح. يمكنك فتح الوصل أو تنزيله مباشرة.</p>
+                      <div className="flex items-center justify-center gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs font-bold gap-1"
+                          onClick={() => handleOpenInNewTab(selectedRequest.receiptUrl!, 'original_receipt')}
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          فتح الوصل
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs font-bold gap-1"
+                          onClick={() => handleDownloadFile(selectedRequest.receiptUrl!, 'original_receipt')}
+                        >
+                          <Download className="h-3 w-3" />
+                          تحميل
+                        </Button>
+                      </div>
+                    </div>
                   ) : (
                     <div className="max-h-56 rounded-xl overflow-hidden border border-border bg-black/5 flex items-center justify-center p-2">
                       <img
                         src={selectedRequest.receiptUrl}
                         alt="وصل التحويل"
                         className="max-h-52 object-contain rounded-lg cursor-pointer transition-transform hover:scale-[1.02]"
+                        onError={() => {
+                          setFailedImages(prev => ({ ...prev, [selectedRequest.receiptUrl!]: true }));
+                        }}
                         onClick={() => setPreviewFile({
                           url: selectedRequest.receiptUrl!,
                           fileName: 'original_receipt.png',
@@ -900,7 +961,7 @@ export function TopUpManagementSection() {
               )}
 
               {/* User Clarification Response & Document Attachment */}
-              {(selectedRequest.userClarificationText || selectedRequest.userClarificationAttachmentUrl) && (
+              {(selectedRequest.userClarificationText || selectedRequest.userClarificationAttachmentUrl || selectedRequest.userResubmittedPostalCode) && (
                 <div className="p-4 rounded-2xl bg-emerald-500/10 border-2 border-emerald-500/40 text-xs space-y-3 shadow-xs">
                   <div className="flex items-center justify-between">
                     <span className="font-black text-emerald-700 dark:text-emerald-300 text-sm flex items-center gap-1.5">
@@ -912,6 +973,28 @@ export function TopUpManagementSection() {
                       </span>
                     )}
                   </div>
+
+                  {selectedRequest.userResubmittedPostalCode && (
+                    <div className="p-3 bg-background rounded-xl border-2 border-emerald-500/40 flex items-center justify-between gap-3 shadow-2xs">
+                      <div>
+                        <span className="text-[11px] text-emerald-700 dark:text-emerald-300 block font-black">
+                          رقم العملية الجديد المعاد إرساله:
+                        </span>
+                        <span className="font-mono text-base font-black text-foreground" dir="ltr">
+                          {selectedRequest.userResubmittedPostalCode}
+                        </span>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs font-bold gap-1 rounded-lg border-emerald-500/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                        onClick={() => handleCopyCode(selectedRequest.userResubmittedPostalCode!)}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        <span>نسخ</span>
+                      </Button>
+                    </div>
+                  )}
 
                   {selectedRequest.userClarificationText && (
                     <div className="space-y-1">
@@ -1014,12 +1097,48 @@ export function TopUpManagementSection() {
                             </Button>
                           </div>
                         </div>
+                      ) : failedImages[selectedRequest.userClarificationAttachmentUrl] ? (
+                        <div className="p-4 bg-muted/40 rounded-xl border border-border text-center space-y-2">
+                          <div className="text-xs font-bold text-foreground">
+                            {selectedRequest.userClarificationFileName || 'مستند العميل المرفق'}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">تعذر عرض الصورة المصغرة في المتصفح. يمكنك فتح المستند أو تنزيله مباشرة.</p>
+                          <div className="flex items-center justify-center gap-2 pt-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs font-bold gap-1"
+                              onClick={() => handleOpenInNewTab(
+                                selectedRequest.userClarificationAttachmentUrl!,
+                                selectedRequest.userClarificationFileName
+                              )}
+                            >
+                              <ExternalLink className="h-3 w-3" />
+                              فتح المستند
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs font-bold gap-1"
+                              onClick={() => handleDownloadFile(
+                                selectedRequest.userClarificationAttachmentUrl!,
+                                selectedRequest.userClarificationFileName
+                              )}
+                            >
+                              <Download className="h-3 w-3" />
+                              تحميل
+                            </Button>
+                          </div>
+                        </div>
                       ) : (
                         <div className="relative group max-h-72 rounded-2xl overflow-hidden border border-border bg-black/5 flex items-center justify-center p-2.5">
                           <img
                             src={selectedRequest.userClarificationAttachmentUrl}
                             alt="مستند العميل"
                             className="max-h-64 object-contain rounded-xl transition-transform duration-200 group-hover:scale-[1.01] cursor-pointer"
+                            onError={() => {
+                              setFailedImages(prev => ({ ...prev, [selectedRequest.userClarificationAttachmentUrl!]: true }));
+                            }}
                             onClick={() => setPreviewFile({
                               url: selectedRequest.userClarificationAttachmentUrl!,
                               fileName: selectedRequest.userClarificationFileName,

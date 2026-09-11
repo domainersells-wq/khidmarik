@@ -237,6 +237,7 @@ export default function ProfilePage() {
   // Top-Up Clarification Dialog State Hooks
   const [selectedClarifyTx, setSelectedClarifyTx] = useState<TopUpTransaction | null>(null);
   const [isClarifyDialogOpen, setIsClarifyDialogOpen] = useState(false);
+  const [resubmitPostalCode, setResubmitPostalCode] = useState('');
   const [clarifyText, setClarifyText] = useState('');
   const [clarifyAttachmentUrl, setClarifyAttachmentUrl] = useState('');
   const [clarifyFileName, setClarifyFileName] = useState('');
@@ -244,6 +245,7 @@ export default function ProfilePage() {
 
   const handleOpenClarifyDialog = (tx: TopUpTransaction) => {
     setSelectedClarifyTx(tx);
+    setResubmitPostalCode(tx.postalTransactionCode || tx.userResubmittedPostalCode || '');
     setClarifyText(tx.userClarificationText || '');
     setClarifyAttachmentUrl(tx.userClarificationAttachmentUrl || '');
     setClarifyFileName(tx.userClarificationFileName || '');
@@ -271,10 +273,12 @@ export default function ProfilePage() {
 
   const handleSubmitClarification = async () => {
     if (!selectedClarifyTx) return;
-    if (!clarifyText.trim() && !clarifyAttachmentUrl) {
+    const cleanCode = resubmitPostalCode.trim();
+    const cleanText = clarifyText.trim();
+    if (!cleanCode && !cleanText && !clarifyAttachmentUrl) {
       toast({
         title: "بيانات ناقصة",
-        description: "يرجى كتابة توضيح أو إرفاق صورة/مستند الوصل.",
+        description: "يرجى إدخال رقم العملية البريدية أو كتابة توضيح أو إرفاق صورة/مستند الوصل.",
         variant: "destructive"
       });
       return;
@@ -283,15 +287,16 @@ export default function ProfilePage() {
     setIsClarifySubmitting(true);
     try {
       const res = financialService.submitTopUpClarification(selectedClarifyTx.id, {
-        clarificationText: clarifyText.trim(),
+        newPostalTransactionCode: cleanCode,
+        clarificationText: cleanText,
         attachmentUrl: clarifyAttachmentUrl,
         fileName: clarifyFileName
       });
 
       if (res.success) {
         toast({
-          title: "تم إرسال التوضيح والمستند بنجاح! 📎",
-          description: "طلبك الآن قيد مراجعة وتدقيق الإدارة وسيتم الرد عليك قريباً.",
+          title: "تم إرسال رقم العملية والمستند بنجاح! 📎",
+          description: "طلبك الآن قيد مراجعة وتدقيق الإدارة وسيتم الرد عليك فور المطابقة.",
         });
         setIsClarifyDialogOpen(false);
         // Refresh local profile data
@@ -302,13 +307,28 @@ export default function ProfilePage() {
               ? {
                   ...t,
                   status: 'pending-review' as any,
-                  userClarificationText: clarifyText.trim(),
+                  postalTransactionCode: cleanCode || t.postalTransactionCode,
+                  userResubmittedPostalCode: cleanCode || t.userResubmittedPostalCode,
+                  userClarificationText: cleanText,
                   userClarificationAttachmentUrl: clarifyAttachmentUrl,
                   userClarificationFileName: clarifyFileName,
                   userClarificationSubmittedAt: new Date().toISOString()
                 }
               : t
           );
+          // If transaction was not in history yet, prepend it
+          if (!updatedHistory.some(t => t.id === selectedClarifyTx.id || t.transactionCode === selectedClarifyTx.transactionCode)) {
+            updatedHistory.unshift({
+              ...selectedClarifyTx,
+              status: 'pending-review' as any,
+              postalTransactionCode: cleanCode || selectedClarifyTx.postalTransactionCode,
+              userResubmittedPostalCode: cleanCode,
+              userClarificationText: cleanText,
+              userClarificationAttachmentUrl: clarifyAttachmentUrl,
+              userClarificationFileName: clarifyFileName,
+              userClarificationSubmittedAt: new Date().toISOString()
+            });
+          }
           if (authUser?.id) {
             const uKeys = [
               'khidmatik_topups_' + authUser.id,
@@ -438,31 +458,36 @@ export default function ProfilePage() {
         setSelectedSubTab('wallet');
         setActiveProfileTab('profile');
 
-        // Check current profile history or financialService store
-        const allTopups = financialService.getTopUpRequests();
-        const match = allTopups.find(
-          t => t.id === requestIdParam || t.publicRequestNumber === requestIdParam
-        );
+        const syncAndOpen = async () => {
+          await financialService.syncTopUpsFromServer().catch(() => {});
+          const allTopups = financialService.getTopUpRequests();
+          const match = allTopups.find(
+            t => t.id === requestIdParam || t.publicRequestNumber === requestIdParam
+          );
 
-        if (match) {
-          const txItem: TopUpTransaction = {
-            id: match.id,
-            userId: match.userId,
-            amount: match.amount,
-            method: match.paymentMethod as any,
-            status: 'info_required' as any,
-            transactionCode: match.publicRequestNumber,
-            createdAt: match.createdAt,
-            processedAt: match.reviewedAt || '',
-            requestedInfoNote: match.requestedInfoNote,
-            requestedInfoAt: match.requestedInfoAt,
-            userClarificationText: match.userClarificationText,
-            userClarificationAttachmentUrl: match.userClarificationAttachmentUrl,
-            userClarificationFileName: match.userClarificationFileName,
-            userClarificationSubmittedAt: match.userClarificationSubmittedAt,
-          };
-          handleOpenClarifyDialog(txItem);
-        }
+          if (match) {
+            const txItem: TopUpTransaction = {
+              id: match.id,
+              userId: match.userId,
+              amount: match.amount,
+              method: match.paymentMethod as any,
+              status: 'info_required' as any,
+              transactionCode: match.publicRequestNumber,
+              postalTransactionCode: match.postalTransactionCode,
+              userResubmittedPostalCode: match.userResubmittedPostalCode,
+              createdAt: match.createdAt,
+              processedAt: match.reviewedAt || '',
+              requestedInfoNote: match.requestedInfoNote,
+              requestedInfoAt: match.requestedInfoAt,
+              userClarificationText: match.userClarificationText,
+              userClarificationAttachmentUrl: match.userClarificationAttachmentUrl,
+              userClarificationFileName: match.userClarificationFileName,
+              userClarificationSubmittedAt: match.userClarificationSubmittedAt,
+            };
+            handleOpenClarifyDialog(txItem);
+          }
+        };
+        syncAndOpen();
       }
     };
 
@@ -825,7 +850,7 @@ export default function ProfilePage() {
 
         // Merge from unified financialService engine
         try {
-          financialService.syncTopUpsFromServer().catch(() => {});
+          await financialService.syncTopUpsFromServer().catch(() => {});
           const engineTopups = financialService.getTopUpRequests();
           const normAuthId = financialService.normalizeUserId(authUser.id);
           engineTopups.forEach((et) => {
@@ -835,7 +860,8 @@ export default function ProfilePage() {
               authUser.id === 'user_1534d1e7' ||
               et.userId === 'currentUser' ||
               (authUser.email && et.userEmail && authUser.email.toLowerCase() === et.userEmail.toLowerCase()) ||
-              (authUser.name && et.userName && authUser.name.toLowerCase().includes(et.userName.toLowerCase()))
+              (authUser.name && et.userName && authUser.name.toLowerCase().includes(et.userName.toLowerCase())) ||
+              (et.userName && authUser.name && et.userName.toLowerCase().includes(authUser.name.toLowerCase()))
             ) {
               const existingIdx = topUpHistory.findIndex(t => t.id === et.id || t.transactionCode === et.publicRequestNumber);
               const mappedStatus = 
@@ -850,6 +876,8 @@ export default function ProfilePage() {
                 method: et.paymentMethod as any,
                 status: mappedStatus as any,
                 transactionCode: et.publicRequestNumber,
+                postalTransactionCode: et.postalTransactionCode,
+                userResubmittedPostalCode: et.userResubmittedPostalCode,
                 createdAt: et.createdAt,
                 processedAt: et.reviewedAt || '',
                 requestedInfoNote: et.requestedInfoNote,
@@ -1120,8 +1148,11 @@ export default function ProfilePage() {
       setBalanceHighlight(true);
       setTimeout(() => setBalanceHighlight(false), 2000);
       toast({
-        title: "تم تحديث ومزامنة الرصيد بنجاح! 💳",
-        description: `الرصيد المتاح الحالي في محفظتك: ${userWallet.availableBalance.toLocaleString()} DA`,
+        title: "تم تحديث ومزامنة الرصيد بنجاح",
+        description: "الرصيد المتاح الحالي في محفظتك:",
+        amount: `${userWallet.availableBalance.toLocaleString()} DA`,
+        cardVariant: 'balance',
+        timestampText: 'الآن',
       });
     } catch (e: any) {
       toast({
@@ -3657,27 +3688,38 @@ export default function ProfilePage() {
 
                           {/* Admin clarification request notice & button */}
                           {isInfo && (
-                            <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 text-xs space-y-2.5">
-                              <div className="flex items-start gap-2">
-                                <LucideIcons.AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
-                                <div className="flex-1 space-y-1">
-                                  <div className="font-bold text-blue-700 dark:text-blue-300">
-                                    مطلوب توضيح أو إرفاق مستند من قِبل إدارة المنصة:
+                            <div className="p-4 rounded-2xl bg-blue-500/10 border-2 border-blue-500/40 text-xs space-y-3 shadow-xs">
+                              <div className="flex items-start gap-2.5">
+                                <LucideIcons.AlertCircle className="h-5 w-5 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5 animate-pulse" />
+                                <div className="flex-1 space-y-1.5">
+                                  <div className="font-extrabold text-sm text-blue-700 dark:text-blue-300 flex items-center justify-between flex-wrap gap-1">
+                                    <span>مطلوب إعادة إرسال رقم العملية أو الوصل البريدي</span>
+                                    {transaction.requestedInfoAt && (
+                                      <span className="text-[11px] font-mono text-muted-foreground font-normal">{transaction.requestedInfoAt}</span>
+                                    )}
                                   </div>
-                                  <p className="text-foreground bg-background/80 p-2.5 rounded-lg border border-blue-500/20 font-medium text-xs leading-relaxed">
-                                    "{transaction.requestedInfoNote || 'يرجى تقديم صورة واضحة لوصل التحويل أو توضيح رقم العملية البريدية لإتمام المطابقة.'}"
-                                  </p>
+                                  <div className="text-foreground bg-background/95 p-3 rounded-xl border border-blue-500/25 font-medium text-xs leading-relaxed shadow-2xs">
+                                    <span className="text-blue-600 dark:text-blue-400 font-bold block mb-1">ملاحظة المشرف المالي:</span>
+                                    "{transaction.requestedInfoNote || 'يرجى تقديم صورة واضحة لوصل التحويل أو توضيح رقم العملية البريدية (Code de transaction) لإتمام المطابقة البريدية وإيداع الرصيد.'}"
+                                  </div>
                                 </div>
                               </div>
 
-                              <div className="flex justify-end pt-1">
+                              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-1 border-t border-blue-500/20">
+                                <span className="text-[11px] text-muted-foreground">
+                                  {transaction.postalTransactionCode ? (
+                                    <>الرقم المسجل حالياً: <strong className="font-mono text-foreground font-bold" dir="ltr">{transaction.postalTransactionCode}</strong></>
+                                  ) : (
+                                    <span>لم يتم تسجيل كود عملية معتمد حتى الآن</span>
+                                  )}
+                                </span>
                                 <Button
                                   size="sm"
                                   onClick={() => handleOpenClarifyDialog(transaction)}
-                                  className="text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl gap-1.5 shadow-sm"
+                                  className="h-10 sm:h-9 text-xs sm:text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl gap-2 shadow-sm touch-manipulation whitespace-nowrap"
                                 >
-                                  <LucideIcons.Paperclip className="h-3.5 w-3.5" />
-                                  <span>تقديم التوضيح وإرفاق المستند المطلوب</span>
+                                  <LucideIcons.Send className="h-4 w-4" />
+                                  <span>إعادة إرسال رقم العملية والوصل</span>
                                 </Button>
                               </div>
                             </div>
@@ -5438,7 +5480,7 @@ export default function ProfilePage() {
           <DialogHeader className="border-b pb-3">
             <DialogTitle className="text-base sm:text-lg font-bold flex items-center gap-2 text-foreground font-headline">
               <LucideIcons.HelpCircle className="h-5 w-5 text-blue-500 shrink-0" />
-              <span>تقديم توضيح أو إرفاق مستند إضافي</span>
+              <span>إعادة إرسال رقم العملية والمستند المطلوب</span>
             </DialogTitle>
             <DialogDescription className="text-xs text-muted-foreground mt-1">
               طلب شحن رقم: <strong className="font-mono text-foreground font-bold" dir="ltr">{selectedClarifyTx?.transactionCode}</strong> • المبلغ: <strong className="font-mono text-emerald-600 dark:text-emerald-400 font-black" dir="ltr">+{selectedClarifyTx?.amount.toLocaleString()} DA</strong>
@@ -5457,29 +5499,60 @@ export default function ProfilePage() {
               </p>
             </div>
 
+            {/* Dedicated Input for Postal Transaction Reference Code */}
+            <div className="space-y-1.5 p-3.5 rounded-2xl bg-primary/5 border border-primary/20">
+              <Label className="text-xs font-bold text-foreground flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <LucideIcons.Hash className="h-4 w-4 text-primary" />
+                  رقم العملية البريدية الجديد (Postal Transaction Code / BaridiMob):
+                </span>
+                <Badge variant="outline" className="text-[10px] font-mono text-primary border-primary/30 font-bold">مطلوب للمطابقة</Badge>
+              </Label>
+              <Input
+                placeholder="أدخل رقم العملية هنا (مثال: 98412034 أو BM-20260908-7712)..."
+                value={resubmitPostalCode}
+                onChange={e => setResubmitPostalCode(e.target.value)}
+                className="text-xs rounded-xl font-mono tracking-wider bg-background h-10 border-primary/30 focus-visible:ring-primary/40 font-bold"
+                dir="ltr"
+              />
+              <span className="text-[10px] text-muted-foreground block leading-normal">
+                الرقم المطبوع على وصل الحوالة البريدية (Numéro de mandat / CCP) أو رمز المعاملة في تطبيق BaridiMob.
+              </span>
+            </div>
+
             {/* User clarification text */}
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-foreground">توضيحك أو ردك على الإدارة:</Label>
+              <Label className="text-xs font-bold text-foreground">توضيح إضافي أو رسالة للإدارة (اختياري):</Label>
               <Textarea
-                placeholder="اكتب التوضيح المطلوب هنا (مثلاً: تم تصوير الوصل بوضوح مع إبراز الختم، أو رقم العملية البريدية الصحيح هو...)"
+                placeholder="اكتب أي ملاحظة إضافية هنا (مثلاً: تم التحويل من مكتب بريد حي النور، والختم واضح أعلى الوصل...)"
                 value={clarifyText}
                 onChange={e => setClarifyText(e.target.value)}
-                className="text-xs rounded-xl min-h-[85px] bg-background"
+                className="text-xs rounded-xl min-h-[75px] bg-background"
               />
             </div>
 
             {/* Document / Receipt Upload */}
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-foreground">إرفاق صورة الوصل أو المستند المطلوب (مستحسن):</Label>
+              <Label className="text-xs font-bold text-foreground">إرفاق صورة جديدة للوصل أو المستند (مستحسن):</Label>
               <div className="border-2 border-dashed border-border/80 rounded-2xl p-4 text-center hover:border-primary/60 transition-colors bg-muted/20">
                 {clarifyAttachmentUrl ? (
                   <div className="space-y-3">
                     {clarifyAttachmentUrl.startsWith('data:image') || clarifyAttachmentUrl.includes('.jpg') || clarifyAttachmentUrl.includes('.png') ? (
-                      <div className="relative inline-block max-h-52 rounded-xl overflow-hidden border border-border shadow-xs">
+                      <div className="relative inline-block max-h-52 rounded-xl overflow-hidden border border-border shadow-xs bg-muted/30">
                         <img
                           src={clarifyAttachmentUrl}
                           alt="المستند المرفق"
-                          className="max-h-48 mx-auto object-contain rounded-xl bg-black/5"
+                          className="max-h-48 mx-auto object-contain rounded-xl"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                            const parent = (e.target as HTMLElement).parentElement;
+                            if (parent && !parent.querySelector('.clarify-img-fallback')) {
+                              const fallback = document.createElement('div');
+                              fallback.className = 'clarify-img-fallback p-4 text-center text-xs text-muted-foreground font-mono font-bold';
+                              fallback.innerText = 'تم اختيار الملف بنجاح وسيتم إرساله للإدارة';
+                              parent.appendChild(fallback);
+                            }
+                          }}
                         />
                       </div>
                     ) : (
@@ -5542,8 +5615,8 @@ export default function ProfilePage() {
             <Button
               size="sm"
               onClick={handleSubmitClarification}
-              disabled={isClarifySubmitting || (!clarifyText.trim() && !clarifyAttachmentUrl)}
-              className="text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white gap-1.5 shadow-sm"
+              disabled={isClarifySubmitting || (!clarifyText.trim() && !clarifyAttachmentUrl && !resubmitPostalCode.trim())}
+              className="text-xs font-bold rounded-xl bg-blue-600 hover:bg-blue-700 text-white gap-1.5 shadow-sm min-h-[44px] px-4"
             >
               {isClarifySubmitting ? (
                 <>
@@ -5553,7 +5626,7 @@ export default function ProfilePage() {
               ) : (
                 <>
                   <LucideIcons.Send className="h-3.5 w-3.5" />
-                  <span>إرسال التوضيح والمستند للإدارة</span>
+                  <span>إرسال رقم العملية والوصل للإدارة</span>
                 </>
               )}
             </Button>

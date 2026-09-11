@@ -2063,6 +2063,7 @@ class FinancialService {
       clarificationText?: string;
       attachmentUrl?: string;
       fileName?: string;
+      newPostalTransactionCode?: string;
     }
   ): { success: boolean; error?: string; topUp?: TopUpRequest } {
     const list = this.getTopUpRequests();
@@ -2079,6 +2080,13 @@ class FinancialService {
     request.userClarificationFileName = clarification.fileName;
     request.userClarificationSubmittedAt = nowStr;
 
+    if (clarification.newPostalTransactionCode && clarification.newPostalTransactionCode.trim()) {
+      const cleanCode = clarification.newPostalTransactionCode.trim();
+      request.postalTransactionCode = cleanCode;
+      request.paymentReference = cleanCode;
+      request.userResubmittedPostalCode = cleanCode;
+    }
+
     this.saveStore(this.TOPUPS_KEY, list);
 
     // Sync user local history
@@ -2093,9 +2101,12 @@ class FinancialService {
               ? {
                   ...item,
                   status: 'pending-review',
+                  postalTransactionCode: request.postalTransactionCode,
                   userClarificationText: clarification.clarificationText,
                   userClarificationAttachmentUrl: clarification.attachmentUrl,
                   userClarificationFileName: clarification.fileName,
+                  userResubmittedPostalCode: request.userResubmittedPostalCode,
+                  userClarificationSubmittedAt: nowStr,
                 }
               : item
           );
@@ -2108,8 +2119,8 @@ class FinancialService {
     notificationService.sendNotification({
       userId: 'admin',
       type: 'topup_request',
-      title: `📎 رد ومستند جديد من المستخدم: ${request.publicRequestNumber}`,
-      message: `قدم ${request.userName} توضيحاً ومستنداً لطلب الشحن (${request.amount.toLocaleString()} دج).`,
+      title: `📎 إعادة إرسال رقم العملية والمستند: ${request.publicRequestNumber}`,
+      message: `أعاد ${request.userName} إرسال رقم العملية البريدية (${request.postalTransactionCode || 'مستند مرفق'}) لطلب الشحن بمبلغ ${request.amount.toLocaleString()} دج.`,
       data: {
         referenceId: request.publicRequestNumber,
         requestId: request.id,

@@ -16,6 +16,9 @@ type ToasterToast = ToastProps & {
   title?: React.ReactNode
   description?: React.ReactNode
   action?: ToastActionElement
+  amount?: string | number
+  timestampText?: string
+  cardVariant?: 'balance' | 'success' | 'info' | 'warning' | 'destructive' | string
 }
 
 const actionTypes = {

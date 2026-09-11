@@ -297,6 +297,7 @@ export interface TopUpRequest {
   userClarificationAttachmentUrl?: string;
   userClarificationFileName?: string;
   userClarificationSubmittedAt?: string;
+  userResubmittedPostalCode?: string;
   balanceBefore?: number;
   balanceAfter?: number;
 }

@@ -230,44 +230,74 @@ class NotificationService {
       return newNotif;
     }
 
-    // 1. Insert into Supabase if connected
-    try {
-      const { data: dbItem, error } = await supabase
-        .from('notifications')
-        .insert({
-          user_id: userId,
-          type,
-          title,
-          message,
-          data: sanitizedData,
-          channel,
-          is_read: false
-        })
-        .select()
-        .single();
-
-      if (dbItem && !error) {
-        newNotif.id = dbItem.id;
-        newNotif.createdAt = dbItem.created_at;
-      }
-    } catch (err) {
-      console.warn('Supabase notification insert fallback to local storage:', err);
+    // 1. Sync with Server Route for guaranteed cross-device persistence
+    if (typeof window !== 'undefined') {
+      fetch('/api/v1/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newNotif),
+      }).catch((e) => console.warn('Server notification sync failed:', e));
     }
 
-    // 2. Persist to local cache for instant UI feedback
+    // 2. Insert into Supabase with schema resilience if connected and userId is valid UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
+    if (isUuid) {
+      try {
+        const { data: dbItem, error } = await supabase
+          .from('notifications')
+          .insert({
+            user_id: userId,
+            type,
+            title,
+            message,
+            data: sanitizedData,
+            channel,
+            is_read: false
+          })
+          .select()
+          .single();
+
+        if (dbItem && !error) {
+          newNotif.id = dbItem.id;
+          newNotif.createdAt = dbItem.created_at;
+        } else if (error) {
+          // Schema fallback if data/channel columns do not exist
+          const { data: fallbackItem } = await supabase
+            .from('notifications')
+            .insert({
+              user_id: userId,
+              type,
+              title,
+              message,
+              is_read: false
+            })
+            .select()
+            .single();
+
+          if (fallbackItem) {
+            newNotif.id = fallbackItem.id;
+            newNotif.createdAt = fallbackItem.created_at;
+          }
+        }
+      } catch (err) {
+        console.warn('Supabase notification insert fallback:', err);
+      }
+    }
+
+    // 3. Persist to local cache for instant UI feedback
     this.saveToLocalCache(newNotif);
 
-    // 3. Dispatch Browser Push if enabled
+    // 4. Dispatch Browser Push if enabled
     if (prefs.pushEnabled && (channel === 'push' || channel === 'all')) {
       pushNotificationService.showLocalNotification(newNotif);
     }
 
-    // 4. Dispatch Email if enabled
+    // 5. Dispatch Email if enabled
     if (prefs.emailEnabled && (channel === 'email' || channel === 'all') && userEmail) {
       emailNotificationService.sendEmail(userEmail, type, title, message, sanitizedData);
     }
 
-    // 5. Notify all active listeners in the client
+    // 6. Notify all active listeners in the client
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('khidmatik_notif_update', { detail: newNotif }));
     }
@@ -284,39 +314,66 @@ class NotificationService {
   ): Promise<NotificationItem[]> {
     let list: NotificationItem[] = [];
 
-    // Try Supabase first
-    try {
-      let query = supabase
-        .from('notifications')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
+    // Try Supabase first if userId is UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
+    if (isUuid) {
+      try {
+        let query = supabase
+          .from('notifications')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
 
-      if (options.isRead !== undefined) {
-        query = query.eq('is_read', options.isRead);
-      }
+        if (options.isRead !== undefined) {
+          query = query.eq('is_read', options.isRead);
+        }
 
-      if (options.limit) {
-        query = query.limit(options.limit);
-      }
+        if (options.limit) {
+          query = query.limit(options.limit);
+        }
 
-      const { data, error } = await query;
-      if (data && !error && data.length > 0) {
-        list = data.map((d: any) => ({
-          id: d.id,
-          userId: d.user_id,
-          type: d.type as NotificationEventType,
-          title: d.title,
-          message: d.message,
-          data: d.data || {},
-          channel: d.channel,
-          isRead: d.is_read,
-          readAt: d.read_at,
-          createdAt: d.created_at
-        }));
+        const { data, error } = await query;
+        if (data && !error && data.length > 0) {
+          list = data.map((d: any) => ({
+            id: d.id,
+            userId: d.user_id,
+            type: d.type as NotificationEventType,
+            title: d.title,
+            message: d.message,
+            data: d.data || {},
+            channel: d.channel || 'all',
+            isRead: d.is_read,
+            readAt: d.read_at,
+            createdAt: d.created_at
+          }));
+        }
+      } catch (e) {
+        console.warn('Could not load notifications from Supabase, loading from cache:', e);
       }
-    } catch (e) {
-      console.warn('Could not load notifications from Supabase, loading from cache:', e);
+    }
+
+    // Also fetch from server API for cross-device synchronization
+    if (typeof window !== 'undefined') {
+      try {
+        const queryParams = new URLSearchParams({ userId: userId || '' });
+        if (options.isRead !== undefined) queryParams.append('isRead', String(options.isRead));
+        if (options.limit) queryParams.append('limit', String(options.limit));
+
+        const res = await fetch(`/api/v1/notifications?${queryParams.toString()}`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && Array.isArray(json.data)) {
+            const serverItems: NotificationItem[] = json.data;
+            serverItems.forEach(si => {
+              if (!list.some(item => item.id === si.id)) {
+                list.push(si);
+              }
+            });
+          }
+        }
+      } catch (serverErr) {
+        // Graceful fallback to local cache
+      }
     }
 
     // Merge with local cache

@@ -9,11 +9,11 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json();
-    const { clarificationText, attachmentUrl, fileName } = body;
+    const { clarificationText, attachmentUrl, fileName, newPostalTransactionCode } = body;
 
-    if ((!clarificationText || !clarificationText.trim()) && !attachmentUrl) {
+    if (!newPostalTransactionCode?.trim() && (!clarificationText || !clarificationText.trim()) && !attachmentUrl) {
       return NextResponse.json(
-        { success: false, error: 'يرجى كتابة توضيح أو إرفاق ملف مستند للرد' },
+        { success: false, error: 'يرجى إدخال رقم العملية البريدية أو كتابة توضيح أو إرفاق وصل التحويل للرد' },
         { status: 400 }
       );
     }
@@ -27,8 +27,12 @@ export async function POST(
     }
 
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const cleanCode = newPostalTransactionCode?.trim();
     const updated = updateServerTopUp(id, {
       status: 'UNDER_REVIEW', // Reset to under review for admin attention
+      postalTransactionCode: cleanCode || existing.postalTransactionCode,
+      paymentReference: cleanCode || existing.paymentReference,
+      userResubmittedPostalCode: cleanCode || existing.userResubmittedPostalCode,
       userClarificationText: clarificationText ? clarificationText.trim() : undefined,
       userClarificationAttachmentUrl: attachmentUrl || undefined,
       userClarificationFileName: fileName || undefined,
@@ -47,8 +51,8 @@ export async function POST(
       await notificationService.sendNotification({
         userId: 'admin',
         type: 'topup_request',
-        title: `📎 رد ومستند جديد من المستخدم: ${updated.publicRequestNumber}`,
-        message: `قدم ${updated.userName} توضيحاً ومستنداً لطلب الشحن (${updated.amount.toLocaleString()} دج). اضغط للتدقيق والمطابقة.`,
+        title: `📎 إعادة إرسال رقم العملية والمستند: ${updated.publicRequestNumber}`,
+        message: `أعاد ${updated.userName} إرسال رقم العملية البريدية (${updated.postalTransactionCode || 'مستند مرفق'}) لطلب الشحن (${updated.amount.toLocaleString()} دج). اضغط للتدقيق والمطابقة.`,
         data: {
           referenceId: updated.publicRequestNumber,
           requestId: updated.id,

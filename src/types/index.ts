@@ -401,6 +401,8 @@ export interface TopUpTransaction {
   method: 'ccp' | 'bank' | 'baridimob' | string;
   status: 'pending-review' | 'approved' | 'rejected' | 'info_required';
   transactionCode: string; // User-provided or system-generated reference
+  postalTransactionCode?: string; // Postal/Banking transaction reference
+  userResubmittedPostalCode?: string; // Newly re-submitted reference if clarification was requested
   receiptImageUrl?: string; // Optional URL for uploaded receipt
   createdAt: string; // ISO timestamp
   processedAt?: string; // ISO timestamp

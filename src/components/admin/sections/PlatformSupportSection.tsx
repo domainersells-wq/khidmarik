@@ -28,9 +28,11 @@ import { supabase } from '@/lib/supabase';
 import { formatDistanceToNow } from 'date-fns';
 import { useToast } from '@/hooks/use-toast';
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 
 export function PlatformSupportSection() {
   const { toast } = useToast();
+  const router = useRouter();
   
   // Tab controller state
   const [activeTab, setActiveTab] = useState<'tickets' | 'faq' | 'chats'>('tickets');
@@ -42,8 +44,14 @@ export function PlatformSupportSection() {
   const [ticketSearch, setTicketSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  // Live chats state (for moderation / inspection)
+  const [activeChats, setActiveChats] = useState<any[]>([
+    { id: 'chat-1', client: 'Mourad Client', merchant: 'DzTech Electronics', lastMsg: 'Is the product available in store?', time: '2 mins ago', status: 'Active' },
+    { id: 'chat-2', client: 'Karim Brahimi', merchant: 'Yacine Plumber', lastMsg: 'I have arrived at the location.', time: '1 hour ago', status: 'Closed' }
+  ]);
+
   useEffect(() => {
-    const fetchTickets = async () => {
+    const fetchTicketsAndChats = async () => {
       setIsLoading(true);
       try {
         const { data, error } = await supabase
@@ -54,52 +62,62 @@ export function PlatformSupportSection() {
           `)
           .order('created_at', { ascending: false });
 
-        if (error) throw error;
+        if (!error && data) {
+          const mapped = data.map((t: any) => ({
+            id: t.id,
+            ticketNumber: t.id.split('-')[0].toUpperCase(),
+            professionalName: t.user?.name || 'User',
+            issueSummary: t.subject,
+            description: t.description,
+            category: 'Platform Support',
+            status: t.status === 'open' ? 'Open' : t.status === 'resolved' ? 'Resolved' : 'Closed',
+            priority: t.priority ? t.priority.charAt(0).toUpperCase() + t.priority.slice(1) : 'Medium',
+            lastUpdate: t.created_at,
+          }));
+          if (mapped.length > 0) setTickets(mapped);
+        }
 
-        const mapped = data.map((t: any) => ({
-          id: t.id,
-          ticketNumber: t.id.split('-')[0].toUpperCase(),
-          professionalName: t.user?.name || 'User',
-          issueSummary: t.subject,
-          description: t.description,
-          category: 'Platform Support',
-          status: t.status === 'open' ? 'Open' : t.status === 'resolved' ? 'Resolved' : 'Closed',
-          priority: t.priority.charAt(0).toUpperCase() + t.priority.slice(1),
-          lastUpdate: t.created_at,
-        }));
-        
-        setTickets(mapped.length > 0 ? mapped : [
-          {
-            id: '1',
-            ticketNumber: 'TCK-9281',
-            professionalName: 'Mounir Plumber',
-            issueSummary: 'Payment Gateway Connection Delay',
-            description: 'Customer completed plumbing booking, but the Escrow amount did not show in pending balance.',
-            category: 'Financials',
-            status: 'Open',
-            priority: 'High',
-            lastUpdate: new Date().toISOString()
-          },
-          {
-            id: '2',
-            ticketNumber: 'TCK-8219',
-            professionalName: 'Karim Brahimi',
-            issueSummary: 'Banner image upload dimensions mismatch',
-            description: 'Shop dashboard rejects banner upload of size 1920x1080.',
-            category: 'Uploads',
-            status: 'Resolved',
-            priority: 'Medium',
-            lastUpdate: new Date(Date.now() - 86400000).toISOString()
-          }
-        ]);
+        // Fetch conversations
+        const { data: convData } = await supabase
+          .from('conversations')
+          .select(`
+            id,
+            type,
+            title,
+            last_message_text,
+            last_message_at,
+            is_locked,
+            conversation_participants (
+              user:profiles(name)
+            )
+          `)
+          .order('last_message_at', { ascending: false })
+          .limit(20);
+
+        if (convData && convData.length > 0) {
+          const mappedChats = convData.map((c: any) => {
+            const parts = c.conversation_participants || [];
+            const clientName = parts[0]?.user?.name || 'Client';
+            const merchantName = parts[1]?.user?.name || c.title || 'Merchant / Support';
+            return {
+              id: c.id,
+              client: clientName,
+              merchant: merchantName,
+              lastMsg: c.last_message_text || 'Active conversation',
+              time: formatDistanceToNow(new Date(c.last_message_at), { addSuffix: true }),
+              status: c.is_locked ? 'Closed' : 'Active'
+            };
+          });
+          setActiveChats(mappedChats);
+        }
       } catch (err) {
-        console.error('Error fetching support tickets:', err);
+        console.error('Error fetching support data:', err);
       } finally {
         setIsLoading(false);
       }
     };
 
-    fetchTickets();
+    fetchTicketsAndChats();
   }, []);
 
   // FAQ state
@@ -112,11 +130,6 @@ export function PlatformSupportSection() {
   const [newFaqAnswer, setNewFaqAnswer] = useState('');
   const [newFaqRole, setNewFaqRole] = useState('general');
 
-  // Live chats state (for moderation / inspection)
-  const [activeChats, setActiveChats] = useState([
-    { id: 'chat-1', client: 'Mourad Client', merchant: 'DzTech Electronics', lastMsg: 'Is the product available in store?', time: '2 mins ago', status: 'Active' },
-    { id: 'chat-2', client: 'Karim Brahimi', merchant: 'Yacine Plumber', lastMsg: 'I have arrived at the location.', time: '1 hour ago', status: 'Closed' }
-  ]);
   const handleViewTicket = (ticket: any) => {
     setSelectedTicket(ticket);
     setReplyText('');
@@ -402,7 +415,7 @@ export function PlatformSupportSection() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button variant="link" size="sm" onClick={() => toast({ title: 'Accessing chat log logs' })} className="text-xs font-semibold text-primary">View Log Logs</Button>
+                      <Button variant="link" size="sm" onClick={() => router.push(`/messages?id=${chat.id}`)} className="text-xs font-semibold text-primary">Open Chat Room</Button>
                     </TableCell>
                   </TableRow>
                 ))}

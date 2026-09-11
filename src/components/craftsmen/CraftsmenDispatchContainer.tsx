@@ -69,9 +69,9 @@ export function CraftsmenDispatchContainer({ forcedRole }: CraftsmenDispatchCont
 
   // Determine active role dynamically: forcedRole > user auth profile > fallback
   const resolvedRole: 'customer' | 'craftsman' | 'admin' = forcedRole || (
-    user?.role === 'admin' 
+    user?.role === 'super_admin' 
       ? 'admin' 
-      : (user?.userType === 'professional' || (user as any)?.storeId)
+      : (user?.role === 'service_provider' || user?.storeId || user?.isFreelancer)
       ? 'craftsman'
       : 'customer'
   );

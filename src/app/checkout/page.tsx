@@ -17,23 +17,32 @@ import { algerianWilayas } from '@/data/algerian-wilayas';
 import type { CartItem, ShippingAddress } from '@/types';
 import { logEvent } from '@/lib/firebase';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { customerOrderService } from '@/services/customerOrderService';
+import { unifiedOrderLifecycleService } from '@/services/unifiedOrderLifecycleService';
+
+import { useAuth } from '@/context/AuthContext';
+import { orderService } from '@/services/orderService';
 
 const CART_STORAGE_KEY = 'khidmatikCart';
 
 interface OrderSummary {
   subtotal: number;
+  discount: number;
   shipping: number;
   total: number;
   items: Array<{ name: string; quantity: number; price: number }>;
 }
 
 export default function CheckoutPage() {
+  const { user } = useAuth();
   const { toast } = useToast();
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [appliedCoupon, setAppliedCoupon] = useState<any | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
   const [placedOrderDetails, setPlacedOrderDetails] = useState<any>(null);
   const [orderSummary, setOrderSummary] = useState<OrderSummary>({
     subtotal: 0,
+    discount: 0,
     shipping: 0,
     total: 0,
     items: [],
@@ -66,6 +75,24 @@ export default function CheckoutPage() {
   useEffect(() => {
     document.title = 'Checkout | Khidmatik';
     loadCartAndCalculateSummary();
+
+    // Auto-fill user profile info if logged in
+    if (user) {
+      setShippingAddress(prev => ({
+        ...prev,
+        fullName: prev.fullName || user.name || '',
+      }));
+    }
+
+    // Load applied coupon from Cart
+    try {
+      const storedCoupon = localStorage.getItem('khidmatik_applied_coupon');
+      if (storedCoupon) {
+        setAppliedCoupon(JSON.parse(storedCoupon));
+      }
+    } catch (e) {
+      console.warn('Failed parsing stored coupon:', e);
+    }
     
     // Load merchant BaridiMob settings if available
     const storedPayment = localStorage.getItem('khidmatik_settings_payment');
@@ -79,11 +106,11 @@ export default function CheckoutPage() {
         console.warn('Failed parsing stored payment settings:', e);
       }
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    calculateOrderSummary(cartItems, shippingMethod);
-  }, [cartItems, shippingMethod]);
+    calculateOrderSummary(cartItems, shippingMethod, appliedCoupon);
+  }, [cartItems, shippingMethod, appliedCoupon]);
 
   const loadCartAndCalculateSummary = () => {
     try {
@@ -96,7 +123,7 @@ export default function CheckoutPage() {
     }
   };
 
-  const calculateOrderSummary = (currentCartItems: CartItem[], currentShippingMethod: string) => {
+  const calculateOrderSummary = (currentCartItems: CartItem[], currentShippingMethod: string, currentCoupon?: any) => {
     const subtotal = currentCartItems.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
     let shippingCost = currentCartItems.length > 0 ? 500 : 0;
 
@@ -106,13 +133,23 @@ export default function CheckoutPage() {
       shippingCost = 0;
     }
 
-    const total = subtotal + shippingCost;
+    let discountAmount = 0;
+    if (currentCoupon) {
+      if (currentCoupon.type === 'percentage') {
+        discountAmount = (subtotal * (currentCoupon.discount || 0)) / 100;
+      } else {
+        discountAmount = currentCoupon.discount || 0;
+      }
+    }
+    discountAmount = Math.min(discountAmount, subtotal);
+
+    const total = Math.max(0, Math.round((subtotal - discountAmount + shippingCost) * 100) / 100);
     const summaryItems = currentCartItems.map(item => ({
       name: `${item.productName}${item.variantDescription ? ` (${item.variantDescription})` : ''}`,
       quantity: item.quantity,
       price: item.unitPrice,
     }));
-    setOrderSummary({ subtotal, shipping: shippingCost, total, items: summaryItems });
+    setOrderSummary({ subtotal, discount: discountAmount, shipping: shippingCost, total, items: summaryItems });
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
@@ -181,21 +218,90 @@ export default function CheckoutPage() {
     }
 
     const matchedWilaya = algerianWilayas.find(w => w.code === shippingAddress.wilayaCode);
+    const wilayaName = matchedWilaya ? `${matchedWilaya.code} - ${matchedWilaya.name_en}` : (shippingAddress.wilayaCode || '16 - Alger');
+
+    const mappedItems = cartItems.map((item, idx) => ({
+      productId: item.productId || `prd_${idx + 1}`,
+      productName: item.productName || (item as any).title || (item as any).name || 'Product',
+      productImage: (item as any).imageUrl || (item as any).image || 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=300',
+      sku: (item as any).sku || `SKU-${idx + 1}`,
+      variantName: item.variantDescription || undefined,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      totalPrice: item.unitPrice * item.quantity,
+      storeId: (item as any).storeId || 'str_1',
+      storeName: (item as any).storeName || 'Tech Universe Algérie',
+    }));
+
+    // 1. Direct insertion to Supabase orders and order_items tables
+    const fallbackCustomerId = user?.id || '00000000-0000-0000-0000-000000000000';
+    const primaryStoreId = mappedItems[0]?.storeId || '00000000-0000-0000-0000-000000000002';
+    try {
+      await orderService.createOrder({
+        customerId: fallbackCustomerId,
+        storeId: primaryStoreId,
+        customerName: shippingAddress.fullName || 'Customer',
+        customerEmail: user?.email || 'customer@khidmatik.dz',
+        customerPhone: shippingAddress.phone || '0550000000',
+        shippingAddress: `${shippingAddress.addressLine1 || ''}, ${shippingAddress.city || ''}, ${wilayaName}`,
+        billingAddress: `${shippingAddress.addressLine1 || ''}, ${shippingAddress.city || ''}, ${wilayaName}`,
+        paymentType: paymentMethod,
+        paymentStatus: paymentMethod === 'escrow_wallet' || paymentMethod === 'sofypay' ? 'paid' : 'pending',
+        total: orderSummary.total,
+        profit: Math.round(orderSummary.total * 0.08),
+        items: mappedItems.map(item => ({
+          productId: item.productId,
+          productName: item.productName,
+          productImageUrl: item.productImage,
+          quantity: item.quantity,
+          price: item.unitPrice,
+        })),
+        customerNotes: `Payment via ${methodName}. Applied discount: ${orderSummary.discount} DA`
+      });
+    } catch (dbErr) {
+      console.warn("Could not insert directly into Supabase orders (using local canonical store):", dbErr);
+    }
+
+    // 2. Create canonical customer order in centralized store for tracking & offline resilience
+    const createdOrder = await customerOrderService.createCustomerOrder({
+      customerId: fallbackCustomerId,
+      customerName: shippingAddress.fullName || 'Customer',
+      customerEmail: user?.email || 'customer@khidmatik.dz',
+      customerPhone: shippingAddress.phone || '0550000000',
+      shippingAddress: {
+        recipientName: shippingAddress.fullName || 'Customer',
+        phone: shippingAddress.phone || '0550000000',
+        country: 'Algeria',
+        wilaya: wilayaName,
+        commune: shippingAddress.city || 'Alger Centre',
+        addressLine: shippingAddress.addressLine1 || '',
+      },
+      subtotal: orderSummary.subtotal,
+      shippingFee: orderSummary.shipping,
+      discountAmount: orderSummary.discount,
+      totalAmount: orderSummary.total,
+      paymentMethod: (paymentMethod === 'sofypay' ? 'edahabia' : paymentMethod === 'baridimob' ? 'baridimob' : 'wallet') as any,
+      items: mappedItems,
+      storeId: primaryStoreId,
+      storeName: mappedItems[0]?.storeName || 'Tech Universe Algérie',
+    });
+
     setPlacedOrderDetails({
-      orderId: Math.floor(100000 + Math.random() * 900000).toString(),
+      orderId: createdOrder.id,
+      orderNumber: createdOrder.orderNumber,
       shipping: {
         ...shippingAddress,
         wilayaName: matchedWilaya ? matchedWilaya.name_en : shippingAddress.wilayaCode
       },
       paymentMethodName: methodName,
       paymentRef: paymentMethod === 'baridimob' ? baridimobTxRef : (paymentMethod === 'sofypay' ? `CHG-${Math.floor(Math.random() * 1000000)}` : `WLT-${Math.floor(Math.random() * 1000000)}`),
-      items: [...orderSummary.items],
+      items: createdOrder.items.map(i => ({ name: i.productName, quantity: i.quantity, price: i.unitPrice })),
       summary: { ...orderSummary }
     });
 
     toast({
-      title: "Order Placed Successfully!",
-      description: `Thank you for your order! ${successMessage} The merchant has been notified.`,
+      title: "Order Placed Successfully! (تم إنشاء الطلب بنجاح)",
+      description: `رقم الطلب: ${createdOrder.orderNumber}. ${successMessage}`,
       duration: 8000,
     });
 
@@ -348,12 +454,24 @@ export default function CheckoutPage() {
         </Card>
 
         {/* Action Buttons */}
-        <div className="flex justify-center gap-4">
-          <Button variant="outline" asChild>
-            <Link href="/listings">Continue Shopping</Link>
+        <div className="flex flex-wrap justify-center gap-3">
+          <Button asChild className="bg-primary hover:bg-primary/95 text-primary-foreground font-bold px-6 h-11 rounded-2xl shadow-sm">
+            <Link href="/account/orders">
+              عرض في طلباتي (View in My Orders) ➔
+            </Link>
           </Button>
-          <Button onClick={() => window.print()} className="bg-primary hover:bg-primary/95 text-primary-foreground">
-            Print / Download PDF (طبع الوصل)
+          {placedOrderDetails?.orderId && (
+            <Button asChild variant="outline" className="font-bold h-11 rounded-2xl border-primary/40 text-primary hover:bg-primary/10">
+              <Link href={`/account/orders/${placedOrderDetails.orderId}`}>
+                تتبع تفاصيل الشحنة (Order Tracking)
+              </Link>
+            </Button>
+          )}
+          <Button variant="ghost" asChild className="h-11 rounded-2xl">
+            <Link href="/listings">مواصلة التسوق (Continue Shopping)</Link>
+          </Button>
+          <Button onClick={() => window.print()} variant="secondary" className="h-11 rounded-2xl font-bold">
+            Print / PDF (طبع الوصل)
           </Button>
         </div>
       </div>
@@ -569,7 +687,11 @@ export default function CheckoutPage() {
 
       {/* Chargily / SofyPay Simulation Modal Gateway */}
       <Dialog open={isChargilyOpen} onOpenChange={setIsChargilyOpen}>
-        <DialogContent className="sm:max-w-md bg-white border border-slate-200 text-slate-800">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md max-h-[90vh] overflow-y-auto bg-white border border-slate-200 text-slate-800">
+          <DialogHeader className="sr-only">
+            <DialogTitle>بوابة الدفع الإلكتروني / Chargily Pay Gateway</DialogTitle>
+            <DialogDescription>دفع آمن بالبطاقة الذهبية أو بطاقة CIB</DialogDescription>
+          </DialogHeader>
           <div className="p-4 rounded-t-lg bg-red-600 text-white flex justify-between items-center -mx-6 -mt-6">
             <span className="font-bold tracking-wide text-sm flex items-center gap-1.5"><CreditCard className="h-5 w-5" /> Chargily Pay / Gateway</span>
             <span className="text-xs bg-red-700/80 px-2 py-0.5 rounded font-mono">DZD {orderSummary.total.toLocaleString()}</span>

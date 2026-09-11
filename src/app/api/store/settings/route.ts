@@ -1,5 +1,6 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
+import { validateApiAuth } from '@/lib/auth/serverAuth';
 
 // GET /api/store/settings?key=XYZ
 export async function GET(request: Request) {
@@ -31,8 +32,13 @@ export async function GET(request: Request) {
 }
 
 // PUT /api/store/settings
-export async function PUT(request: Request) {
+export async function PUT(request: NextRequest) {
   try {
+    const authResult = await validateApiAuth(request, { requiredPermissions: ['manage_settings'] });
+    if (!authResult.authorized && authResult.response) {
+      return authResult.response;
+    }
+
     const body = await request.json();
     const { key, value } = body;
 

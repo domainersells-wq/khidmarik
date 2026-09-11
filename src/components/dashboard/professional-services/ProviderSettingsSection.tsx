@@ -11,6 +11,7 @@ import { Settings, Shield, Bell, Activity, Download, Trash2, Link2, AlertCircle,
 import { useToast } from '@/hooks/use-toast';
 import { Separator } from '@/components/ui/separator';
 import { useLanguage } from '@/context/LanguageContext';
+import { BusinessLocationManager } from '../common/BusinessLocationManager';
 
 interface ActivityLogItem {
   id: string;
@@ -297,6 +298,24 @@ export function ProviderSettingsSection() {
         </h1>
         <p className="text-muted-foreground">{t('desc', 'Manage settings.')}</p>
       </header>
+
+      {/* 1. Professional & Craftsman Location & Service Area Management */}
+      <BusinessLocationManager 
+        businessName="ورشة وخدمات الحرفي / المهني"
+        businessType="craftsman"
+        initialData={{
+          city: 'سيدي بلعباس',
+          wilaya: 'سيدي بلعباس',
+          wilayaCode: '22',
+          isLocationPublic: true,
+          isMobileService: true,
+          serviceAreaRadius: 30,
+          serviceWilayas: ['سيدي بلعباس', 'وهران', 'عين تموشنت']
+        }}
+        onSave={async (data) => {
+          localStorage.setItem('khidmatik_provider_location', JSON.stringify(data));
+        }}
+      />
 
       {/* Security */}
       <Card>

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Dialog, DialogContent } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { 
@@ -84,6 +84,12 @@ export function EmergencyWakeupAlertModal({
   return (
     <Dialog open={isOpen} onOpenChange={() => {}}>
       <DialogContent className="max-w-lg p-0 bg-slate-950 text-white border-2 border-red-600 shadow-2xl shadow-red-600/50 overflow-hidden">
+        <DialogHeader className="sr-only">
+          <DialogTitle>{isAr ? 'نداء استغاثة طارئ فوري' : 'Live Emergency SOS Alert'}</DialogTitle>
+          <DialogDescription>
+            {isAr ? 'تنبيه طلب خدمة طارئة فوري' : 'Emergency service dispatch notification'}
+          </DialogDescription>
+        </DialogHeader>
         {/* Animated Top Pulsing Banner */}
         <div className="bg-gradient-to-r from-red-600 via-rose-600 to-red-600 p-4 text-center relative overflow-hidden">
           <div className="absolute inset-0 bg-[radial-gradient(circle,_rgba(255,255,255,0.2)_10%,_transparent_20%)] bg-[length:16px_16px] animate-pulse opacity-30" />

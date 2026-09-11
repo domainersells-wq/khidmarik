@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { globalEscrowStore } from '@/lib/server/escrowStore';
+import { validateApiAuth } from '@/lib/auth/serverAuth';
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ escrowId: string }> }
 ) {
   try {
+    const authResult = await validateApiAuth(request, { requiredPermissions: ['manage_disputes'] });
+    if (!authResult.authorized && authResult.response) {
+      return authResult.response;
+    }
+
     const { escrowId } = await params;
     const body = await request.json();
     const {

@@ -47,6 +47,11 @@ export function ListingsClientContainer({ initialListings, initialParams }: List
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [currentView, setCurrentView] = useState<'split' | 'map' | 'list'>('split');
 
+  // Geolocation & Nearest sort state
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [isLocatingUser, setIsLocatingUser] = useState(false);
+  const [sortByNearest, setSortByNearest] = useState(false);
+
   // Yelp advanced filters
   const [openNow, setOpenNow] = useState(false);
   const [selectedPrices, setSelectedPrices] = useState<string[]>([]);
@@ -151,12 +156,99 @@ export function ListingsClientContainer({ initialListings, initialParams }: List
     (onlyVerified ? 1 : 0) +
     Object.values(features).filter(Boolean).length;
 
+  // Haversine Distance helper
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371; // Radius of earth in km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Explicit User Geolocation Handler
+  const handleRequestUserLocation = () => {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      toast({
+        title: isRtl ? 'الموقع غير مدعوم' : 'Geolocation Not Supported',
+        description: isRtl ? 'متصفحك لا يدعم خاصية تحديد الموقع الجغرافي.' : 'Geolocation is not supported by your browser.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    setIsLocatingUser(true);
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coords = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+        setUserLocation(coords);
+        setIsLocatingUser(false);
+        setSortByNearest(true);
+
+        toast({
+          title: isRtl ? 'تم تحديد موقعك وترتيب النتائج بالأقرب 🎯' : 'Location Detected & Sorted by Nearest 🎯',
+          description: isRtl ? 'تم ترتيب كافة الخدمات والمتاجر حسب المسافة من موقعك.' : 'All listings are now sorted by distance.'
+        });
+      },
+      (err) => {
+        setIsLocatingUser(false);
+        let errorTitle = isRtl ? 'فشل تحديد الموقع' : 'Location Detection Failed';
+        let errorMessage = '';
+
+        switch (err.code) {
+          case err.PERMISSION_DENIED:
+            errorTitle = isRtl ? 'تم رفض إذن الموقع' : 'Permission Denied';
+            errorMessage = isRtl 
+              ? 'تم رفض إذن الوصول إلى الموقع. يرجى تفعيل إذن الموقع في إعدادات المتصفح للاستفادة من حساب المسافات.' 
+              : 'Location permission was denied in your browser settings.';
+            break;
+          case err.POSITION_UNAVAILABLE:
+            errorTitle = isRtl ? 'الموقع غير متوفر' : 'Location Unavailable';
+            errorMessage = isRtl 
+              ? 'معلومات الموقع الجغرافي غير متوفرة حالياً. يرجى التحقق من اتصال GPS أو الشبكة.' 
+              : 'Location information is currently unavailable.';
+            break;
+          case err.TIMEOUT:
+            errorTitle = isRtl ? 'انتهت مهلة الطلب' : 'Request Timeout';
+            errorMessage = isRtl 
+              ? 'انتهت مهلة طلب تحديد الموقع. يرجى المحاولة مجدداً.' 
+              : 'The location request timed out. Please try again.';
+            break;
+          default:
+            errorMessage = isRtl ? 'حدث خطأ أثناء جلب موقعك.' : 'An error occurred while detecting location.';
+            break;
+        }
+
+        toast({
+          title: errorTitle,
+          description: errorMessage,
+          variant: 'destructive'
+        });
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 30000
+      }
+    );
+  };
+
   const resetAllFilters = () => {
     setOpenNow(false);
     setMinRating(0);
     setSelectedPrices([]);
     setOnlyMadeInAlgeria(false);
     setOnlyVerified(false);
+    setSortByNearest(false);
     setFeatures({
       wifi: false,
       parking: false,
@@ -171,7 +263,7 @@ export function ListingsClientContainer({ initialListings, initialParams }: List
     });
   };
 
-  // Filter listings client-side
+  // Filter & Sort listings client-side
   const filteredListings = listings.filter(item => {
     // 1. Open Now Filter
     if (openNow) {
@@ -216,6 +308,17 @@ export function ListingsClientContainer({ initialListings, initialParams }: List
     if (features.delivery && !storeFeatures.delivery) return false;
 
     return true;
+  }).sort((a, b) => {
+    if (sortByNearest && userLocation) {
+      const latA = (a as any).latitude ? parseFloat((a as any).latitude) : 35.1903;
+      const lngA = (a as any).longitude ? parseFloat((a as any).longitude) : -0.6309;
+      const latB = (b as any).latitude ? parseFloat((b as any).latitude) : 35.1903;
+      const lngB = (b as any).longitude ? parseFloat((b as any).longitude) : -0.6309;
+      const distA = calculateDistance(userLocation.lat, userLocation.lng, latA, lngA);
+      const distB = calculateDistance(userLocation.lat, userLocation.lng, latB, lngB);
+      return distA - distB;
+    }
+    return 0;
   });
 
   const handleShareWhatsApp = (item: Listing) => {
@@ -378,7 +481,34 @@ export function ListingsClientContainer({ initialListings, initialParams }: List
               <span>{isRtl ? 'موثّق فقط' : 'Verified Only'}</span>
             </Button>
 
-            {/* 6. Reset Filters Button (Appears only if filters are active) */}
+            {/* 6. Nearest to My Location Pill */}
+            <Button
+              variant={sortByNearest ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => {
+                if (!userLocation && !sortByNearest) {
+                  handleRequestUserLocation();
+                } else {
+                  setSortByNearest(!sortByNearest);
+                }
+              }}
+              disabled={isLocatingUser}
+              className={cn(
+                "rounded-full text-xs font-semibold px-3 py-1.5 h-9 transition-all duration-200 gap-1.5",
+                sortByNearest 
+                  ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-500/25 ring-2 ring-emerald-400/40" 
+                  : "bg-background hover:border-emerald-600/50"
+              )}
+            >
+              {isLocatingUser ? (
+                <Compass className="h-3.5 w-3.5 text-primary animate-spin" />
+              ) : (
+                <Compass className="h-3.5 w-3.5 text-primary" />
+              )}
+              <span>{isRtl ? 'الأقرب إليّ (GPS)' : 'Nearest to Me'}</span>
+            </Button>
+
+            {/* 7. Reset Filters Button (Appears only if filters are active) */}
             {activeFiltersCount > 0 && (
               <Button
                 variant="ghost"
@@ -544,9 +674,23 @@ export function ListingsClientContainer({ initialListings, initialParams }: List
                           </div>
 
                           <div className="space-y-1.5 pt-2 border-t text-xs text-muted-foreground">
-                            <div className="flex items-center gap-1.5">
-                              <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
-                              <span className="truncate">{item.location.city}</span>
+                            <div className="flex items-center justify-between gap-1.5">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <MapPin className="h-3.5 w-3.5 text-primary shrink-0" />
+                                <span className="truncate">{item.location.city}</span>
+                              </div>
+                              {userLocation && (() => {
+                                const lat = (item as any).latitude ? parseFloat((item as any).latitude) : 35.1903;
+                                const lng = (item as any).longitude ? parseFloat((item as any).longitude) : -0.6309;
+                                const d = calculateDistance(userLocation.lat, userLocation.lng, lat, lng);
+                                const distText = d < 1 ? `${Math.round(d * 1000)} ${isRtl ? 'متر' : 'm'}` : `${d.toFixed(1)} ${isRtl ? 'كم' : 'km'}`;
+                                return (
+                                  <span className="text-[11px] font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
+                                    <Compass className="h-3 w-3" />
+                                    <span>{distText}</span>
+                                  </span>
+                                );
+                              })()}
                             </div>
                             {item.contact.phone && (
                               <div className="flex items-center gap-1.5">
@@ -576,7 +720,7 @@ export function ListingsClientContainer({ initialListings, initialParams }: List
                             className="text-xs text-primary h-8 flex-1 font-bold"
                           >
                             <a href={`/listings/${item.id}`} onClick={e => e.stopPropagation()}>
-                              {isRtl ? 'التفاصيل' : 'Details'}
+                              {language === 'ar' ? 'زيارة' : language === 'fr' ? 'Visiter' : 'Visit'}
                               <ExternalLink className="h-3 w-3 ml-1 shrink-0" />
                             </a>
                           </Button>

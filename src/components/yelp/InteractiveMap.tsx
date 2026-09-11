@@ -1,11 +1,24 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import type { Listing } from '@/types';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import type { Listing, Store, Professional } from '@/types';
+import type { RouteResult, PlaceSuggestion, LocationCoordinates } from '@/services/maps/types';
+import { locationService } from '@/services/maps/locationService';
+import { placesSearchService } from '@/services/maps/placesSearchService';
+import { routingService } from '@/services/maps/routingService';
+import { mapStateManager, type UserLocationState } from '@/services/maps/mapStateManager';
+import { getCategoryMarkerConfig, generateCustomMarkerHtml, CATEGORY_MARKER_MAP } from '@/services/maps/mapMarkers';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
 import { 
   MapPin, Compass, Navigation, Eye, ZoomIn, ZoomOut, RotateCcw, 
-  Map as MapIcon, Sliders, RefreshCw, Layers, X
+  Sliders, RefreshCw, Layers, X, Maximize2, Minimize2, Phone, 
+  ExternalLink, MessageCircle, Star, Sparkles, LocateFixed, Check,
+  Search, ShieldCheck, Clock, Store as StoreIcon, Wrench, Utensils,
+  Car, HeartPulse, Building2, AlertCircle, Share2, Route as RouteIcon,
+  ChevronUp, ChevronDown, ArrowRight, CornerUpRight, Info, ListOrdered,
+  Plus, Minus, Scissors
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/LanguageContext';
@@ -15,761 +28,909 @@ interface InteractiveMapProps {
   listings: Listing[];
   onMarkerClick?: (listing: Listing) => void;
   selectedListing?: Listing | null;
+  className?: string;
 }
 
-// Sidi Bel Abbès coordinates as default center
-const DEFAULT_LAT = 35.19;
-const DEFAULT_LNG = -0.63;
+// Tile Providers (100% In-App Web Tiles, No external redirects)
+const TILE_PROVIDERS = {
+  streets: {
+    nameAr: 'شوارع حديثة',
+    nameEn: 'Streets',
+    nameFr: 'Rues',
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; CartoDB &copy; OpenStreetMap',
+    maxZoom: 20,
+  },
+  satellite: {
+    nameAr: 'قمر صناعي',
+    nameEn: 'Satellite',
+    nameFr: 'Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '&copy; Esri World Imagery',
+    maxZoom: 19,
+  },
+  dark: {
+    nameAr: 'الوضع الليلي',
+    nameEn: 'Dark Mode',
+    nameFr: 'Mode Nuit',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '&copy; CartoDB &copy; OpenStreetMap',
+    maxZoom: 20,
+  },
+  osm: {
+    nameAr: 'خريطة قياسية',
+    nameEn: 'Standard OSM',
+    nameFr: 'OSM Standard',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+  }
+};
 
-export function InteractiveMap({ listings, onMarkerClick, selectedListing }: InteractiveMapProps) {
+type TileMode = keyof typeof TILE_PROVIDERS;
+
+export function InteractiveMap({
+  listings,
+  onMarkerClick,
+  selectedListing,
+  className
+}: InteractiveMapProps) {
   const { language } = useLanguage();
-  const [radius, setRadius] = useState<number>(15); // in km
-  const [searchThisArea, setSearchThisArea] = useState<boolean>(true);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
-  const [zoomLevel, setZoomLevel] = useState<number>(12);
-  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
-  const [isStreetViewOpen, setIsStreetViewOpen] = useState(false);
-  const [streetViewListing, setStreetViewListing] = useState<Listing | null>(null);
-  const [streetViewRotation, setStreetViewRotation] = useState(0);
-  const [hoveredListingId, setHoveredListingId] = useState<string | null>(null);
+  const isRtl = language === 'ar';
 
-  // Leaflet CDN Integration states
-  const [isLeafletLoaded, setIsLeafletLoaded] = useState(false);
+  const initialMapState = mapStateManager.getState();
+
+  // Map DOM & Leaflet Refs (Persistent & isolated from React re-renders)
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const leafletMapRef = useRef<any>(null);
-  const markersGroupRef = useRef<any>(null);
+  const tileLayerRef = useRef<any>(null);
+  const markersLayerGroupRef = useRef<any>(null);
+  const userMarkerRef = useRef<any>(null);
+  const userAccuracyCircleRef = useRef<any>(null);
+  const routePolylineRef = useRef<any>(null);
+  const isInitializedRef = useRef<boolean>(false);
+  const lastSearchCenterRef = useRef<{ lat: number; lng: number }>(initialMapState.center);
 
-  // Generate coordinates for listings if they don't have any (mocking coords based on ID)
-  const listingsWithCoords = listings.map((item, idx) => {
-    const lat = (item as any).latitude 
-      ? parseFloat((item as any).latitude) 
-      : DEFAULT_LAT + (Math.sin(idx * 12.3) * 0.05);
-    const lng = (item as any).longitude 
-      ? parseFloat((item as any).longitude) 
-      : DEFAULT_LNG + (Math.cos(idx * 8.7) * 0.06);
+  const [leafletInstance, setLeafletInstance] = useState<any>(null);
 
-    return {
-      ...item,
-      lat,
-      lng
-    };
-  });
+  // Persistent UI States from MapStateManager
+  const [activeItem, setActiveItem] = useState<Listing | null>(selectedListing || initialMapState.selectedBusiness);
+  const [tileMode, setTileMode] = useState<TileMode>((initialMapState.tileMode as TileMode) || 'streets');
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const [isTileDropdownOpen, setIsTileDropdownOpen] = useState(false);
 
-  const getDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371; // Radius of the earth in km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-      Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c; // Distance in km
-  };
+  // In-App Search & Viewport
+  const [searchQuery, setSearchQuery] = useState(initialMapState.searchQuery || '');
+  const [placeSuggestions, setPlaceSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [isSearchingPlaces, setIsSearchingPlaces] = useState(false);
+  const [showSearchThisArea, setShowSearchThisArea] = useState<boolean>(false);
 
-  // Filter listings by radius
-  const filteredListings = listingsWithCoords.filter(item => {
-    if (!userLocation) return true;
-    const dist = getDistance(userLocation.lat, userLocation.lng, item.lat, item.lng);
-    return dist <= radius;
-  });
+  // Categories & Distance Filters
+  const [selectedCategory, setSelectedCategory] = useState<string>(initialMapState.activeCategory || 'all');
+  const [selectedDistanceKm, setSelectedDistanceKm] = useState<number | null>(initialMapState.selectedDistanceKm);
 
-  // Request user GPS location
-  const handleGPSLocation = () => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const coords = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude
-        };
-        setUserLocation(coords);
-        setMapCenter(coords);
-        setZoomLevel(14);
-      },
-      (err) => {
-        const mockCoords = { lat: DEFAULT_LAT + 0.015, lng: DEFAULT_LNG - 0.02 };
-        setUserLocation(mockCoords);
-        setMapCenter(mockCoords);
-        setZoomLevel(13);
+  // Real Device Geolocation State
+  const [userLocationState, setUserLocationState] = useState<UserLocationState | null>(initialMapState.userLocation);
+  const [isLocatingUser, setIsLocatingUser] = useState<boolean>(false);
+
+  // In-App Routing & Directions
+  const [activeRoute, setActiveRoute] = useState<RouteResult | null>(null);
+  const [isCalculatingRoute, setIsCalculatingRoute] = useState<boolean>(false);
+  const [showRouteStepsModal, setShowRouteStepsModal] = useState<boolean>(false);
+
+  // Mobile Bottom Sheet
+  const [isBottomSheetExpanded, setIsBottomSheetExpanded] = useState<boolean>(false);
+
+  // 1. Process & Normalize Listings with Coordinates
+  const processedListings = useMemo(() => {
+    return listings.map((item, index) => {
+      const explicitLat = (item as any).latitude ? parseFloat((item as any).latitude) : null;
+      const explicitLng = (item as any).longitude ? parseFloat((item as any).longitude) : null;
+
+      let lat = explicitLat || 35.1903;
+      let lng = explicitLng || -0.6309;
+
+      if (!explicitLat || !explicitLng) {
+        const offsetLat = Math.sin(index * 1.7) * 0.024;
+        const offsetLng = Math.cos(index * 2.1) * 0.032;
+        lat = 35.1903 + offsetLat;
+        lng = -0.6309 + offsetLng;
       }
-    );
-  };
 
-  const handleOpenStreetView = (item: any) => {
-    setStreetViewListing(item);
-    setStreetViewRotation(0);
-    setIsStreetViewOpen(true);
-  };
+      const categoryMeta = getCategoryMarkerConfig(item.category, item.type);
 
-  // Dynamically load Leaflet CDN Script and Stylesheets
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    if ((window as any).L) {
-      setIsLeafletLoaded(true);
-      return;
-    }
-
-    // Add stylesheet
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-    link.crossOrigin = '';
-    document.head.appendChild(link);
-
-    // Add Javascript script
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    script.crossOrigin = '';
-    script.onload = () => {
-      setIsLeafletLoaded(true);
-    };
-    script.onerror = () => {
-      console.warn("Leaflet script failed to load. Falling back to High-Fidelity SVG Map.");
-    };
-    document.head.appendChild(script);
-  }, []);
-
-  // Initialize Leaflet map instance
-  useEffect(() => {
-    if (!isLeafletLoaded || !mapContainerRef.current) return;
-    const L = (window as any).L;
-    if (!L) return;
-
-    if (!leafletMapRef.current) {
-      const map = L.map(mapContainerRef.current, {
-        center: [mapCenter.lat, mapCenter.lng],
-        zoom: zoomLevel,
-        zoomControl: false,
-        attributionControl: false
-      });
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19
-      }).addTo(map);
-
-      leafletMapRef.current = map;
-      markersGroupRef.current = L.layerGroup().addTo(map);
-
-      // Update mapCenter state when user drags Leaflet map
-      map.on('moveend', () => {
-        const center = map.getCenter();
-        setMapCenter({ lat: center.lat, lng: center.lng });
-      });
-
-      map.on('zoomend', () => {
-        setZoomLevel(map.getZoom());
-      });
-    }
-  }, [isLeafletLoaded]);
-
-  // Sync center and zoom with Leaflet map
-  useEffect(() => {
-    if (leafletMapRef.current) {
-      const map = leafletMapRef.current;
-      const mapCenterCoords = map.getCenter();
-      if (
-        Math.abs(mapCenterCoords.lat - mapCenter.lat) > 0.0001 || 
-        Math.abs(mapCenterCoords.lng - mapCenter.lng) > 0.0001
-      ) {
-        map.setView([mapCenter.lat, mapCenter.lng], zoomLevel);
-      }
-    }
-  }, [mapCenter, zoomLevel]);
-
-  // Synchronize Markers in Leaflet Layer Group
-  useEffect(() => {
-    if (!isLeafletLoaded || !leafletMapRef.current || !markersGroupRef.current) return;
-    const L = (window as any).L;
-    const group = markersGroupRef.current;
-
-    // Clear old elements
-    group.clearLayers();
-
-    // Append listing markers
-    filteredListings.forEach((item) => {
-      const isSelected = selectedListing?.id === item.id;
-      
-      const pinColor = isSelected ? '#ef4444' : '#3b82f6';
-      const markerHtml = `
-        <div class="relative flex items-center justify-center transition-all duration-200 hover:scale-115">
-          ${isSelected ? '<div class="absolute h-9 w-9 bg-red-500/30 rounded-full animate-ping"></div>' : ''}
-          <div class="h-7 w-7 rounded-full bg-white shadow-lg flex items-center justify-center border-2" style="border-color: ${pinColor}">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24" class="h-4 w-4" style="color: ${pinColor}">
-              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" />
-            </svg>
-          </div>
-        </div>
-      `;
-
-      const customIcon = L.divIcon({
-        html: markerHtml,
-        className: 'custom-map-marker',
-        iconSize: [28, 28],
-        iconAnchor: [14, 28]
-      });
-
-      const marker = L.marker([item.lat, item.lng], { icon: customIcon })
-        .on('click', () => {
-          if (onMarkerClick) onMarkerClick(item);
-        });
-
-      // Bind clean preview popup
-      marker.bindPopup(`
-        <div style="font-family: system-ui, sans-serif; font-size: 12px; min-width: 140px; padding: 2px;">
-          <div style="font-weight: bold; color: #1e293b; margin-bottom: 2px;">${item.name}</div>
-          <div style="color: #eab308; font-weight: bold; margin-bottom: 2px;">★ ${item.averageRating.toFixed(1)} (${item.pricing || '$$'})</div>
-          <div style="color: #64748b; font-size: 10px; font-weight: 500;">${item.category}</div>
-        </div>
-      `);
-
-      group.addLayer(marker);
+      return {
+        ...item,
+        lat,
+        lng,
+        categoryMeta
+      };
     });
+  }, [listings]);
 
-    // Append User Marker
-    if (userLocation) {
-      const userHtml = `
-        <div class="relative flex items-center justify-center">
-          <div class="absolute h-8 w-8 bg-blue-500/20 rounded-full animate-pulse"></div>
-          <div class="h-4 w-4 rounded-full bg-blue-500 border-2 border-white shadow-md"></div>
-        </div>
-      `;
-      const userIcon = L.divIcon({
-        html: userHtml,
-        className: 'user-map-marker',
-        iconSize: [24, 24],
-        iconAnchor: [12, 12]
-      });
-      L.marker([userLocation.lat, userLocation.lng], { icon: userIcon }).addTo(group);
-    }
-  }, [isLeafletLoaded, filteredListings, selectedListing, userLocation]);
-
-  // Synchronize Leaflet radius circle
-  useEffect(() => {
-    if (!isLeafletLoaded || !leafletMapRef.current || !userLocation) return;
-    const L = (window as any).L;
-    const map = leafletMapRef.current;
-
-    if ((window as any).leafletRadiusCircle) {
-      map.removeLayer((window as any).leafletRadiusCircle);
-    }
-
-    const circle = L.circle([userLocation.lat, userLocation.lng], {
-      color: '#ef4444',
-      fillColor: '#ef4444',
-      fillOpacity: 0.08,
-      weight: 1.5,
-      dashArray: '5, 5',
-      radius: radius * 1000
-    }).addTo(map);
-
-    (window as any).leafletRadiusCircle = circle;
-
-    return () => {
-      if ((window as any).leafletRadiusCircle) {
-        map.removeLayer((window as any).leafletRadiusCircle);
+  // 2. Filter listings based on category, search query, and distance filter
+  const filteredListings = useMemo(() => {
+    return processedListings.filter((item) => {
+      if (selectedCategory !== 'all') {
+        const catKey = (item.category || item.type || '').toLowerCase();
+        if (selectedCategory === 'store' && item.type !== 'store') return false;
+        if (selectedCategory === 'craftsman' && item.type !== 'professional') return false;
+        if (selectedCategory === 'food' && !catKey.includes('rest') && !catKey.includes('food')) return false;
+        if (selectedCategory === 'auto' && !catKey.includes('auto') && !catKey.includes('car')) return false;
+        if (selectedCategory === 'health' && !catKey.includes('doc') && !catKey.includes('pharma') && !catKey.includes('medic')) return false;
       }
-    };
-  }, [isLeafletLoaded, userLocation, radius]);
 
-  // Track selected listing center updates
+      if (searchQuery.trim().length > 0) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchesName = item.name.toLowerCase().includes(q);
+        const matchesCat = (item.category || '').toLowerCase().includes(q);
+        const matchesCity = (item.location?.city || '').toLowerCase().includes(q);
+        const matchesDesc = (item.description || '').toLowerCase().includes(q);
+        if (!matchesName && !matchesCat && !matchesCity && !matchesDesc) return false;
+      }
+
+      if (selectedDistanceKm && userLocationState?.coordinates) {
+        const dist = locationService.calculateDistanceKm(userLocationState.coordinates, { lat: item.lat, lng: item.lng });
+        if (dist > selectedDistanceKm) return false;
+      }
+
+      return true;
+    });
+  }, [processedListings, selectedCategory, searchQuery, selectedDistanceKm, userLocationState]);
+
+  // Sync selectedListing prop with local activeItem without resetting map center
   useEffect(() => {
     if (selectedListing) {
-      const idx = listings.findIndex(l => l.id === selectedListing.id);
-      if (idx !== -1) {
-        const itemCoords = listingsWithCoords[idx];
-        setMapCenter({ lat: itemCoords.lat, lng: itemCoords.lng });
-        setZoomLevel(15);
+      setActiveItem(selectedListing);
+      mapStateManager.setSelectedBusiness(selectedListing);
+      if (leafletMapRef.current && (selectedListing as any).latitude) {
+        leafletMapRef.current.flyTo([(selectedListing as any).latitude, (selectedListing as any).longitude], 15, { duration: 1.2 });
       }
     }
   }, [selectedListing]);
 
-  const handleZoomIn = () => {
-    setZoomLevel(prev => {
-      const next = Math.min(18, prev + 1);
-      if (leafletMapRef.current) leafletMapRef.current.setZoom(next);
-      return next;
-    });
-  };
+  // 3. Initialize Leaflet Map ONCE on mount (NEVER recreate on language change)
+  useEffect(() => {
+    let isMounted = true;
 
-  const handleZoomOut = () => {
-    setZoomLevel(prev => {
-      const next = Math.max(8, prev - 1);
-      if (leafletMapRef.current) leafletMapRef.current.setZoom(next);
-      return next;
-    });
-  };
+    async function initMap() {
+      if (typeof window === 'undefined' || !mapContainerRef.current || isInitializedRef.current) return;
 
-  const handleResetMap = () => {
-    setMapCenter({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
-    setZoomLevel(12);
-    if (leafletMapRef.current) {
-      leafletMapRef.current.setView([DEFAULT_LAT, DEFAULT_LNG], 12);
+      try {
+        const L = (await import('leaflet')).default;
+        if (!isMounted) return;
+        setLeafletInstance(L);
+
+        // Fix Leaflet icons
+        delete (L.Icon.Default.prototype as any)._getIconUrl;
+        L.Icon.Default.mergeOptions({
+          iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+          iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+          shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+        });
+
+        const currentMapState = mapStateManager.getState();
+        const initialCenter = currentMapState.center;
+        const initialZoom = currentMapState.zoom;
+
+        const map = L.map(mapContainerRef.current, {
+          center: [initialCenter.lat, initialCenter.lng],
+          zoom: initialZoom,
+          zoomControl: false,
+          attributionControl: false,
+        });
+
+        const provider = TILE_PROVIDERS[tileMode];
+        tileLayerRef.current = L.tileLayer(provider.url, {
+          maxZoom: provider.maxZoom,
+          subdomains: 'abcd',
+        }).addTo(map);
+
+        markersLayerGroupRef.current = L.layerGroup().addTo(map);
+
+        // Track user pan/zoom movements to update "Search this area" button & mapStateManager
+        map.on('moveend', () => {
+          const center = map.getCenter();
+          const zoom = map.getZoom();
+          mapStateManager.setCenter({ lat: center.lat, lng: center.lng }, zoom);
+
+          // Check if moved away from previous search center
+          const distFromLast = locationService.calculateDistanceKm(lastSearchCenterRef.current, { lat: center.lat, lng: center.lng });
+          if (distFromLast > 1.5) {
+            setShowSearchThisArea(true);
+          }
+        });
+
+        leafletMapRef.current = map;
+        isInitializedRef.current = true;
+
+        // ResizeObserver
+        const resizeObserver = new ResizeObserver(() => {
+          if (map) map.invalidateSize();
+        });
+        if (mapContainerRef.current) {
+          resizeObserver.observe(mapContainerRef.current);
+        }
+
+      } catch (err) {
+        console.error('Error initializing Khidmatik In-App Map:', err);
+      }
+    }
+
+    initMap();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 4. Update Tile Provider on Mode Change
+  useEffect(() => {
+    if (!leafletInstance || !leafletMapRef.current) return;
+    const L = leafletInstance;
+    const map = leafletMapRef.current;
+
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+
+    const provider = TILE_PROVIDERS[tileMode];
+    tileLayerRef.current = L.tileLayer(provider.url, {
+      maxZoom: provider.maxZoom,
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    mapStateManager.updateState({ tileMode });
+  }, [tileMode, leafletInstance]);
+
+  // 5. Render Markers with Custom Category Themes & In-App Clicks
+  useEffect(() => {
+    if (!leafletInstance || !leafletMapRef.current || !markersLayerGroupRef.current) return;
+    const L = leafletInstance;
+    const map = leafletMapRef.current;
+    const group = markersLayerGroupRef.current;
+
+    group.clearLayers();
+
+    filteredListings.forEach((item) => {
+      const isSelected = activeItem?.id === item.id;
+      const isSponsored = !!((item as any).isSponsored || (item as any).sponsored);
+      const logoUrl = (item as any).logoUrl || (item as any).logo || undefined;
+      const markerHtml = generateCustomMarkerHtml(item.categoryMeta, item.name, item.averageRating, isSelected, isSponsored, logoUrl);
+
+      const customIcon = L.divIcon({
+        html: markerHtml,
+        className: 'khidmatik-custom-pin',
+        iconSize: [42, 48],
+        iconAnchor: [21, 48],
+        popupAnchor: [0, -46]
+      });
+
+      const marker = L.marker([item.lat, item.lng], { icon: customIcon });
+
+      marker.on('click', () => {
+        setActiveItem(item);
+        mapStateManager.setSelectedBusiness(item);
+        if (onMarkerClick) onMarkerClick(item);
+        map.panTo([item.lat, item.lng]);
+        setIsBottomSheetExpanded(true);
+      });
+
+      marker.addTo(group);
+    });
+  }, [leafletInstance, filteredListings, activeItem, onMarkerClick]);
+
+  // 6. Draw In-App Driving Route Polyline
+  useEffect(() => {
+    if (!leafletInstance || !leafletMapRef.current) return;
+    const L = leafletInstance;
+    const map = leafletMapRef.current;
+
+    if (routePolylineRef.current) {
+      map.removeLayer(routePolylineRef.current);
+      routePolylineRef.current = null;
+    }
+
+    if (activeRoute && activeRoute.polylineCoordinates.length > 0) {
+      const polyline = L.polyline(activeRoute.polylineCoordinates, {
+        color: '#2563eb',
+        weight: 6,
+        opacity: 0.9,
+        lineCap: 'round',
+        lineJoin: 'round',
+      }).addTo(map);
+
+      routePolylineRef.current = polyline;
+      map.fitBounds(polyline.getBounds(), { padding: [70, 70] });
+    }
+  }, [activeRoute, leafletInstance]);
+
+  // 7. Handle "Use My Location" (Real Device GPS & Real Accuracy Radius)
+  const handleUseMyLocation = async () => {
+    setIsLocatingUser(true);
+
+    try {
+      const { coordinates } = await locationService.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 20000,
+        maximumAge: 0
+      });
+      
+      mapStateManager.setUserLocation(coordinates, 'gps');
+      setUserLocationState({
+        coordinates,
+        accuracy: coordinates.accuracy,
+        timestamp: Date.now(),
+        source: 'gps'
+      });
+      setIsLocatingUser(false);
+
+      if (leafletInstance && leafletMapRef.current) {
+        const L = leafletInstance;
+        const map = leafletMapRef.current;
+
+        // Remove previous user markers & circle
+        if (userMarkerRef.current) map.removeLayer(userMarkerRef.current);
+        if (userAccuracyCircleRef.current) map.removeLayer(userAccuracyCircleRef.current);
+
+        // Real Accuracy Circle: Use position.coords.accuracy directly (e.g. 15m)
+        if (coordinates.accuracy && coordinates.accuracy < 3000) {
+          const circle = L.circle([coordinates.lat, coordinates.lng], {
+            radius: coordinates.accuracy,
+            color: '#3b82f6',
+            fillColor: '#3b82f6',
+            fillOpacity: 0.14,
+            weight: 1.5,
+          }).addTo(map);
+          userAccuracyCircleRef.current = circle;
+        }
+
+        // Blue Location Pin
+        const userHtml = `
+          <div class="relative flex items-center justify-center select-none">
+            <div class="absolute h-11 w-11 rounded-full bg-blue-500/40 animate-ping"></div>
+            <div class="h-6 w-6 rounded-full bg-blue-600 border-2 border-white shadow-xl flex items-center justify-center text-white ring-2 ring-blue-400">
+              <div class="h-2 w-2 rounded-full bg-white"></div>
+            </div>
+          </div>
+        `;
+        const userIcon = L.divIcon({
+          html: userHtml,
+          className: 'user-gps-marker',
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+
+        const marker = L.marker([coordinates.lat, coordinates.lng], { icon: userIcon }).addTo(map);
+        userMarkerRef.current = marker;
+
+        // Smooth Camera Animation
+        const currentZoom = map.getZoom() || 13;
+        const targetZoom = currentZoom < 14 ? 14 : currentZoom;
+        map.flyTo([coordinates.lat, coordinates.lng], targetZoom, { duration: 1.4 });
+
+        const accInfo = locationService.formatAccuracy(coordinates.accuracy, isRtl ? 'ar' : 'en');
+        toast({
+          title: isRtl ? 'تم تحديد موقعك بدقة 🎯' : 'Location Detected 🎯',
+          description: accInfo.text
+        });
+      }
+    } catch (err: any) {
+      setIsLocatingUser(false);
+      toast({
+        title: isRtl ? 'تعذر جلب الموقع الجغرافي' : 'Location Error',
+        description: isRtl ? err.messageAr : err.messageEn,
+        variant: 'destructive'
+      });
     }
   };
 
-  // Calculate coordinates mapping for the vector map SVG visualization (FALLBACK ONLY)
-  const mapWidth = 500;
-  const mapHeight = 400;
-  
-  const zoomFactor = Math.pow(1.5, zoomLevel - 12);
-  const fallbackLatRange = 0.2 / zoomFactor;
-  const fallbackLngRange = 0.2 / zoomFactor;
-
-  const xScale = mapWidth / fallbackLngRange;
-  const yScale = mapHeight / fallbackLatRange;
-
-  const getXY = (lat: number, lng: number) => {
-    const x = ((lng - (mapCenter.lng - fallbackLngRange / 2)) / fallbackLngRange) * mapWidth;
-    const y = mapHeight - (((lat - (mapCenter.lat - fallbackLatRange / 2)) / fallbackLatRange) * mapHeight);
-    return { x, y };
+  // 8. Handle "Search This Area (بحث في هذا النطاق)"
+  const handleSearchThisArea = () => {
+    if (!leafletMapRef.current) return;
+    const center = leafletMapRef.current.getCenter();
+    lastSearchCenterRef.current = { lat: center.lat, lng: center.lng };
+    setShowSearchThisArea(false);
+    
+    toast({
+      title: isRtl ? 'تم تحديث نطاق البحث 🔍' : 'Search Area Updated 🔍',
+      description: isRtl ? 'تم تحديث نتائج الخدمات وفقاً لمنطقة الخريطة المعروضة.' : 'Listings filtered for current map view.'
+    });
   };
 
-  const userXY = userLocation ? getXY(userLocation.lat, userLocation.lng) : null;
-  const isRtl = language === 'ar';
+  // 9. Handle In-App Search Place Autocomplete
+  const handleSearchInputChange = async (val: string) => {
+    setSearchQuery(val);
+    mapStateManager.updateState({ searchQuery: val });
 
-  // SVG Fallback elements coordinates
-  const riverPoints = [
-    { lat: DEFAULT_LAT - 0.15, lng: DEFAULT_LNG - 0.12 },
-    { lat: DEFAULT_LAT - 0.08, lng: DEFAULT_LNG - 0.06 },
-    { lat: DEFAULT_LAT, lng: DEFAULT_LNG - 0.015 },
-    { lat: DEFAULT_LAT + 0.07, lng: DEFAULT_LNG + 0.04 },
-    { lat: DEFAULT_LAT + 0.15, lng: DEFAULT_LNG + 0.12 },
-  ].map(p => getXY(p.lat, p.lng));
+    if (!val.trim() || val.length < 2) {
+      setPlaceSuggestions([]);
+      return;
+    }
 
-  const park1Center = getXY(DEFAULT_LAT + 0.025, DEFAULT_LNG - 0.035);
-  const park1W = 0.035 * xScale;
-  const park1H = 0.025 * yScale;
+    setIsSearchingPlaces(true);
+    const suggestions = await placesSearchService.searchPlaces(val, {
+      userLocation: userLocationState?.coordinates || null,
+      language: isRtl ? 'ar' : 'fr',
+      limit: 5
+    });
+    setPlaceSuggestions(suggestions);
+    setIsSearchingPlaces(false);
+  };
 
-  const park2Center = getXY(DEFAULT_LAT - 0.04, DEFAULT_LNG + 0.045);
-  const park2W = 0.025 * xScale;
-  const park2H = 0.02 * yScale;
+  const handleSelectPlaceSuggestion = (place: PlaceSuggestion) => {
+    setSearchQuery(place.name);
+    setPlaceSuggestions([]);
+    mapStateManager.updateState({ searchQuery: place.name });
 
-  const lakeCenter = getXY(DEFAULT_LAT + 0.055, DEFAULT_LNG + 0.065);
-  const lakeW = 0.04 * xScale;
-  const lakeH = 0.03 * yScale;
+    if (leafletMapRef.current) {
+      const currentZoom = leafletMapRef.current.getZoom() || 13;
+      const targetZoom = currentZoom < 14 ? 14 : currentZoom;
+      leafletMapRef.current.flyTo([place.coordinates.lat, place.coordinates.lng], targetZoom, { duration: 1.2 });
+    }
+  };
 
-  // Road lines
-  const rdSouidaniStart = getXY(DEFAULT_LAT, DEFAULT_LNG - 0.15);
-  const rdSouidaniEnd = getXY(DEFAULT_LAT, DEFAULT_LNG + 0.15);
+  // 10. Handle In-App Driving Route (100% Inside Khidmatik)
+  const handleGetDirections = async (item: Listing) => {
+    let startCoords = userLocationState?.coordinates;
 
-  const rdRepubliqueStart = getXY(DEFAULT_LAT - 0.15, DEFAULT_LNG);
-  const rdRepubliqueEnd = getXY(DEFAULT_LAT + 0.15, DEFAULT_LNG);
+    if (!startCoords) {
+      try {
+        const { coordinates } = await locationService.getCurrentPosition({ enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+        startCoords = coordinates;
+        mapStateManager.setUserLocation(coordinates, 'gps');
+        setUserLocationState({
+          coordinates,
+          accuracy: coordinates.accuracy,
+          timestamp: Date.now(),
+          source: 'gps'
+        });
+      } catch (e) {
+        startCoords = { lat: 35.1903, lng: -0.6309 };
+      }
+    }
 
-  const rdZabanaStart = getXY(DEFAULT_LAT - 0.1, DEFAULT_LNG - 0.1);
-  const rdZabanaEnd = getXY(DEFAULT_LAT + 0.1, DEFAULT_LNG + 0.1);
+    const itemLat = (item as any).latitude ? parseFloat((item as any).latitude) : (item as any).lat;
+    const itemLng = (item as any).longitude ? parseFloat((item as any).longitude) : (item as any).lng;
+
+    setIsCalculatingRoute(true);
+    toast({
+      title: isRtl ? 'جاري حساب مسار القيادة داخل التطبيق...' : 'Calculating in-app driving route...',
+      description: isRtl ? `الاتجاه نحو ${item.name}` : `Navigating to ${item.name}`
+    });
+
+    try {
+      const route = await routingService.calculateRoute(
+        startCoords,
+        { lat: itemLat, lng: itemLng },
+        { language: isRtl ? 'ar' : 'en' }
+      );
+      setActiveRoute(route);
+      setIsCalculatingRoute(false);
+    } catch (err) {
+      setIsCalculatingRoute(false);
+      toast({
+        title: isRtl ? 'تعذر حساب المسار' : 'Routing Failed',
+        description: isRtl ? 'تعذر جلب بيانات المسار حالياً.' : 'Failed to retrieve route.',
+        variant: 'destructive'
+      });
+    }
+  };
+
+  // Calculate distance for an item from user location
+  const getItemDistance = (item: any) => {
+    if (!userLocationState?.coordinates) return null;
+    const d = locationService.calculateDistanceKm(userLocationState.coordinates, { lat: item.lat, lng: item.lng });
+    return locationService.formatDistance(d, isRtl ? 'ar' : 'en');
+  };
 
   return (
-    <div className="w-full h-full flex flex-col bg-card border rounded-2xl overflow-hidden shadow-lg relative min-h-[450px]">
+    <div 
+      className={cn(
+        "relative w-full h-full min-h-[480px] overflow-hidden rounded-2xl border bg-background select-none flex flex-col",
+        isFullscreen ? "fixed inset-0 z-50 rounded-none h-screen w-screen" : "",
+        className
+      )}
+    >
       
-      {/* Top Map Settings Overlay */}
-      <div className="absolute top-3 left-3 right-3 z-30 flex flex-wrap gap-2 pointer-events-none">
-        {/* Radius control */}
-        <div className="bg-popover/90 backdrop-blur-md text-popover-foreground border px-3 py-2 rounded-xl shadow-md pointer-events-auto flex items-center gap-2 text-xs font-semibold select-none">
-          <Sliders className="h-3.5 w-3.5 text-primary" />
-          <span>{isRtl ? 'نصف القطر:' : 'Radius:'} {radius} km</span>
-          <input 
-            type="range" 
-            min="1" 
-            max="50" 
-            value={radius} 
-            onChange={(e) => setRadius(parseInt(e.target.value))}
-            className="w-24 accent-primary cursor-pointer h-1.5 rounded-full" 
-          />
+      {/* 1. Top HUD: In-App Search Bar & Floating Controls */}
+      <div className="absolute top-3 inset-x-3 z-30 flex flex-col gap-2 pointer-events-none" dir={isRtl ? 'rtl' : 'ltr'}>
+        
+        {/* Search Bar + Floating Action Buttons */}
+        <div className="flex items-center gap-2 pointer-events-auto">
+          <div className="relative flex-1 shadow-sm rounded-xl overflow-hidden bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700">
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <Input
+              type="text"
+              placeholder={isRtl ? "ابحث عن خدمة، حرفي، متجر، أو بلدية..." : "Search service, craftsman, store, or city..."}
+              value={searchQuery}
+              onChange={(e) => handleSearchInputChange(e.target.value)}
+              aria-label={isRtl ? "بحث في الخريطة" : "Search map"}
+              className="pl-9 pr-9 h-11 text-xs font-medium bg-transparent border-0 focus-visible:ring-0 focus-visible:ring-offset-0 text-foreground placeholder:text-muted-foreground"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => { 
+                  setSearchQuery(''); 
+                  setPlaceSuggestions([]); 
+                  mapStateManager.updateState({ searchQuery: '' });
+                }}
+                aria-label={isRtl ? "مسح البحث" : "Clear search"}
+                className="absolute right-3 top-1/2 -translate-y-1/2 h-5 w-5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-600"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Use My Location GPS Button */}
+          <Button
+            type="button"
+            size="icon"
+            onClick={handleUseMyLocation}
+            disabled={isLocatingUser}
+            aria-label={isRtl ? 'موقعي الحالي' : 'Current location'}
+            className={cn(
+              "h-11 w-11 rounded-xl bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 shadow-sm shrink-0 transition-colors",
+              userLocationState ? "text-primary border-primary/40 bg-primary/5" : "text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800"
+            )}
+            title={isRtl ? 'موقعي الحالي' : 'Current Location'}
+          >
+            {isLocatingUser ? <RefreshCw className="h-4 w-4 animate-spin text-primary" /> : <LocateFixed className="h-4 w-4" />}
+          </Button>
+
+          {/* Layer Selector */}
+          <div className="relative">
+            <Button
+              type="button"
+              size="icon"
+              onClick={() => setIsTileDropdownOpen(!isTileDropdownOpen)}
+              aria-label={isRtl ? 'طبقات الخريطة' : 'Map layers'}
+              className="h-11 w-11 rounded-xl bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm shrink-0"
+              title={isRtl ? 'طبقات الخريطة' : 'Map Layers'}
+            >
+              <Layers className="h-4 w-4" />
+            </Button>
+            {isTileDropdownOpen && (
+              <div className="absolute right-0 mt-2 w-36 rounded-xl bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 p-1 shadow-lg flex flex-col gap-1 z-40 animate-in fade-in zoom-in-95">
+                {(Object.keys(TILE_PROVIDERS) as TileMode[]).map((key) => (
+                  <button
+                    key={key}
+                    onClick={() => { setTileMode(key); setIsTileDropdownOpen(false); }}
+                    className={cn(
+                      "w-full text-right px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors",
+                      tileMode === key ? "bg-primary text-primary-foreground font-bold" : "text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    )}
+                  >
+                    {isRtl ? TILE_PROVIDERS[key].nameAr : TILE_PROVIDERS[key].nameEn}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Fullscreen Toggle */}
+          <Button
+            type="button"
+            size="icon"
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            aria-label={isRtl ? 'ملء الشاشة' : 'Fullscreen map'}
+            className="h-11 w-11 rounded-xl bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 shadow-sm shrink-0 hidden sm:flex"
+            title={isRtl ? 'ملء الشاشة' : 'Toggle Fullscreen'}
+          >
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </Button>
         </div>
 
-        {/* GPS Finder */}
-        <Button
-          type="button"
-          onClick={handleGPSLocation}
-          className="bg-popover/90 hover:bg-popover backdrop-blur-md text-popover-foreground border rounded-xl shadow-md pointer-events-auto flex items-center gap-1.5 px-3 py-1.5 h-auto text-xs font-semibold active:scale-95 transition-all"
+        {/* Floating "Search This Area" Pill (When user pans map away) */}
+        {showSearchThisArea && (
+          <div className="flex justify-center pointer-events-auto animate-in fade-in-50 zoom-in-95">
+            <Button
+              size="sm"
+              onClick={handleSearchThisArea}
+              className="rounded-full h-8 px-4 text-xs font-bold bg-white dark:bg-card text-foreground hover:bg-slate-50 border border-slate-200/80 dark:border-slate-700 shadow-md flex items-center gap-1.5"
+            >
+              <Search className="h-3.5 w-3.5 text-primary" />
+              <span>{isRtl ? 'البحث في هذا النطاق المعروض' : 'Search This Area'}</span>
+            </Button>
+          </div>
+        )}
+
+        {/* Place Autocomplete Results Dropdown */}
+        {placeSuggestions.length > 0 && (
+          <div className="bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 rounded-xl shadow-xl p-1.5 flex flex-col gap-1 pointer-events-auto max-w-md animate-in fade-in-50 zoom-in-95">
+            {placeSuggestions.map((place) => (
+              <button
+                key={place.id}
+                type="button"
+                onClick={() => handleSelectPlaceSuggestion(place)}
+                className="w-full text-right px-3 py-2 rounded-lg text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <MapPin className="h-3.5 w-3.5 text-primary" />
+                  <span>{place.name}</span>
+                </div>
+                {place.wilayaCode && <Badge variant="outline" className="text-[10px]">ولاية {place.wilayaCode}</Badge>}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Quick Category & Radii Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-1 pointer-events-auto">
+          {[
+            { id: 'all', labelAr: 'الكل', labelEn: 'All', icon: Compass },
+            { id: 'store', labelAr: 'متاجر', labelEn: 'Stores', icon: StoreIcon },
+            { id: 'craftsman', labelAr: 'حرفيين', labelEn: 'Craftsmen', icon: Wrench },
+            { id: 'food', labelAr: 'مطاعم', labelEn: 'Food', icon: Utensils },
+            { id: 'auto', labelAr: 'سيارات', labelEn: 'Auto', icon: Car },
+            { id: 'health', labelAr: 'صحة', labelEn: 'Health', icon: HeartPulse },
+            { id: 'cleaning', labelAr: 'تنظيف', labelEn: 'Cleaning', icon: Sparkles },
+            { id: 'beauty', labelAr: 'تجميل', labelEn: 'Beauty', icon: Scissors },
+          ].map((cat) => {
+            const IconComp = cat.icon;
+            const isSelected = selectedCategory === cat.id;
+            return (
+              <button
+                key={cat.id}
+                onClick={() => {
+                  setSelectedCategory(cat.id);
+                  mapStateManager.updateState({ activeCategory: cat.id });
+                }}
+                aria-label={isRtl ? cat.labelAr : cat.labelEn}
+                className={cn(
+                  "px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 shadow-sm backdrop-blur-md transition-all flex items-center gap-1.5 border",
+                  isSelected
+                    ? "bg-primary/10 text-primary border-primary/40 font-bold shadow-sm"
+                    : "bg-white/95 dark:bg-card/95 text-slate-700 dark:text-slate-200 border-slate-200/80 dark:border-slate-700 hover:border-primary/30"
+                )}
+              >
+                <IconComp className={cn("h-3.5 w-3.5", isSelected ? "text-primary" : "text-slate-500 dark:text-slate-400")} />
+                <span>{isRtl ? cat.labelAr : cat.labelEn}</span>
+              </button>
+            );
+          })}
+
+          {/* Quick Distance Radius Filter Chips (When GPS is on) */}
+          {userLocationState?.coordinates && (
+            <div className="flex items-center gap-1 border-r border-slate-200 dark:border-slate-700 pr-1.5">
+              {[1, 5, 10, 25, 50].map((km) => (
+                <button
+                  key={km}
+                  onClick={() => {
+                    const newKm = selectedDistanceKm === km ? null : km;
+                    setSelectedDistanceKm(newKm);
+                    mapStateManager.updateState({ selectedDistanceKm: newKm });
+                  }}
+                  className={cn(
+                    "px-2 py-1 rounded-lg text-[11px] font-semibold shrink-0 transition-all border",
+                    selectedDistanceKm === km
+                      ? "bg-blue-600 text-white border-blue-600 shadow-sm font-bold"
+                      : "bg-white/95 dark:bg-card/95 text-slate-600 dark:text-slate-300 border-slate-200/80 dark:border-slate-700 hover:text-foreground"
+                  )}
+                >
+                  {km} {isRtl ? 'كم' : 'km'}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* 2. In-App Navigation HUD Banner (100% In-App Route & ETA) */}
+      {activeRoute && (
+        <div 
+          className="absolute top-28 inset-x-3 z-30 flex items-center justify-between p-3 rounded-2xl bg-blue-600 text-white shadow-2xl backdrop-blur-md animate-in slide-in-from-top-4"
+          dir={isRtl ? 'rtl' : 'ltr'}
         >
-          <Compass className="h-3.5 w-3.5 text-primary" />
-          {isRtl ? 'الموقع الحالي' : 'GPS Location'}
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+              <RouteIcon className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 text-sm font-black">
+                <span>{activeRoute.formattedDuration}</span>
+                <span>•</span>
+                <span>{activeRoute.formattedDistance}</span>
+              </div>
+              <p className="text-[11px] text-white/85">
+                {isRtl ? 'مسار القيادة المحسوب داخل خريطة خدماتك' : 'In-App navigation route on Khidmatik map'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            {activeRoute.steps && activeRoute.steps.length > 0 && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setShowRouteStepsModal(!showRouteStepsModal)}
+                className="h-8 text-xs font-bold rounded-xl gap-1 bg-white/20 hover:bg-white/30 text-white border-0"
+              >
+                <ListOrdered className="h-3.5 w-3.5" />
+                <span>{isRtl ? 'خطوات المسار' : 'Steps'}</span>
+              </Button>
+            )}
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setActiveRoute(null)}
+              className="h-8 w-8 text-white hover:bg-white/20 rounded-xl"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* 3. In-App Route Steps Drawer (When opened) */}
+      {showRouteStepsModal && activeRoute?.steps && (
+        <div className="absolute top-44 inset-x-3 z-30 max-h-56 overflow-y-auto rounded-2xl bg-popover/95 backdrop-blur-md border shadow-2xl p-3 space-y-2 animate-in fade-in-50" dir={isRtl ? 'rtl' : 'ltr'}>
+          <div className="flex items-center justify-between pb-1 border-b">
+            <h5 className="font-bold text-xs">{isRtl ? 'تفاصيل خطوات المسار' : 'Turn-by-Turn Route Steps'}</h5>
+            <button type="button" onClick={() => setShowRouteStepsModal(false)}><X className="h-3.5 w-3.5" /></button>
+          </div>
+          <div className="space-y-1.5">
+            {activeRoute.steps.map((step, idx) => (
+              <div key={idx} className="flex items-center justify-between text-xs py-1 px-2 rounded-lg bg-muted/40">
+                <span className="font-semibold">{idx + 1}. {step.instruction}</span>
+                <span className="text-[11px] text-muted-foreground">{step.distanceKm} {isRtl ? 'كم' : 'km'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 4. Main In-App Leaflet Map Canvas (Fixed Neutral dir="ltr") */}
+      <div 
+        ref={mapContainerRef} 
+        dir="ltr"
+        className="w-full h-full flex-1 z-10" 
+      />
+
+      {/* 5. Zoom & Reset Floating Controls (Bottom Right) */}
+      <div className="absolute bottom-6 right-4 z-20 flex flex-col gap-1.5">
+        <Button
+          size="icon"
+          onClick={() => leafletMapRef.current?.zoomIn()}
+          aria-label={isRtl ? 'تكبير' : 'Zoom in'}
+          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 shadow-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center"
+          title={isRtl ? 'تكبير الخريطة' : 'Zoom In'}
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+        <Button
+          size="icon"
+          onClick={() => leafletMapRef.current?.zoomOut()}
+          aria-label={isRtl ? 'تصغير' : 'Zoom out'}
+          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 shadow-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center"
+          title={isRtl ? 'تصغير الخريطة' : 'Zoom Out'}
+        >
+          <Minus className="h-4 w-4" />
+        </Button>
+        <Button
+          size="icon"
+          onClick={() => {
+            const currentCenter = mapStateManager.getState().center;
+            leafletMapRef.current?.setView([currentCenter.lat, currentCenter.lng], 13);
+          }}
+          aria-label={isRtl ? 'إعادة ضبط الخريطة' : 'Reset map view'}
+          className="h-10 w-10 sm:h-11 sm:w-11 rounded-xl bg-white/95 dark:bg-card/95 backdrop-blur-md border border-slate-200/80 dark:border-slate-700 shadow-sm text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center"
+          title={isRtl ? 'إعادة ضبط الخريطة' : 'Reset View'}
+        >
+          <RotateCcw className="h-4 w-4" />
         </Button>
       </div>
 
-      {/* Dynamic Search area check button overlay */}
-      {searchThisArea && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 pointer-events-auto">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              toast({ title: isRtl ? 'تم تحديث منطقة البحث' : 'Search boundaries updated', description: isRtl ? 'تم تحديث النتائج بناءً على إحداثيات الخريطة الحالية' : 'Results updated based on current map viewport.' });
-            }}
-            className="shadow-xl border rounded-full bg-primary text-primary-foreground hover:bg-primary/95 flex items-center gap-1.5 font-semibold text-xs py-2 px-4 scale-100 hover:scale-105 active:scale-95 transition-all duration-150"
-          >
-            <RefreshCw className="h-3.5 w-3.5 animate-spin-slow" />
-            {isRtl ? 'البحث داخل هذه المنطقة' : 'Search This Area'}
-          </Button>
-        </div>
-      )}
-
-      {/* Map Controls Drawer */}
-      <div className="absolute right-3 bottom-14 z-30 flex flex-col gap-1.5 pointer-events-auto">
-        <button 
-          onClick={handleZoomIn}
-          className="p-2 rounded-xl border bg-popover/95 backdrop-blur-md text-popover-foreground hover:bg-muted shadow-md flex items-center justify-center transition-all"
+      {/* 6. Mobile Synchronized Bottom Sheet / In-App Business Card */}
+      {activeItem && (
+        <div 
+          className={cn(
+            "absolute bottom-0 inset-x-0 z-30 transition-all duration-300 ease-out",
+            "p-3 bg-card/95 backdrop-blur-xl border-t shadow-2xl rounded-t-3xl",
+            isBottomSheetExpanded ? "max-h-[380px]" : "max-h-[165px]"
+          )}
+          dir={isRtl ? 'rtl' : 'ltr'}
         >
-          <ZoomIn className="h-4 w-4" />
-        </button>
-        <button 
-          onClick={handleZoomOut}
-          className="p-2 rounded-xl border bg-popover/95 backdrop-blur-md text-popover-foreground hover:bg-muted shadow-md flex items-center justify-center transition-all"
-        >
-          <ZoomOut className="h-4 w-4" />
-        </button>
-        <button 
-          onClick={handleResetMap}
-          className="p-2 rounded-xl border bg-popover/95 backdrop-blur-md text-popover-foreground hover:bg-muted shadow-md flex items-center justify-center transition-all"
-          title="Reset Map Center"
-        >
-          <RotateCcw className="h-4 w-4" />
-        </button>
-      </div>
+          {/* Sheet Handle */}
+          <div className="flex justify-center -mt-1 pb-2 cursor-pointer" onClick={() => setIsBottomSheetExpanded(!isBottomSheetExpanded)}>
+            <div className="w-12 h-1.5 rounded-full bg-muted-foreground/30 hover:bg-muted-foreground/50 transition-colors" />
+          </div>
 
-      {/* Map Display area */}
-      <div className="flex-1 w-full bg-[#f4f3f0] dark:bg-slate-900 relative overflow-hidden flex items-center justify-center border-b">
-        {isLeafletLoaded ? (
-          /* Real Leaflet OpenStreetMap Container */
-          <div ref={mapContainerRef} className="absolute inset-0 w-full h-full z-10" />
-        ) : (
-          /* Vector Interactive Map Fallback (Loaded instantly) */
-          <svg className="absolute inset-0 w-full h-full select-none" viewBox={`0 0 ${mapWidth} ${mapHeight}`}>
-            <defs>
-              <radialGradient id="radiusGlow" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="hsl(var(--primary))" stopOpacity="0.25" />
-                <stop offset="100%" stopColor="hsl(var(--primary))" stopOpacity="0.0" />
-              </radialGradient>
-              
-              <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(148, 163, 184, 0.08)" strokeWidth="1" />
-              </pattern>
-            </defs>
-
-            <rect width="100%" height="100%" fill="url(#grid)" />
-
-            {/* Parks */}
-            <rect 
-              x={park1Center.x - park1W / 2} 
-              y={park1Center.y - park1H / 2} 
-              width={park1W} 
-              height={park1H} 
-              rx="8" 
-              fill="rgba(34, 197, 94, 0.12)" 
-              stroke="rgba(34, 197, 94, 0.25)" 
-              strokeWidth="1.5" 
-            />
-            <text 
-              x={park1Center.x} 
-              y={park1Center.y} 
-              fill="rgba(21, 128, 61, 0.45)" 
-              fontSize="9" 
-              fontWeight="bold" 
-              textAnchor="middle"
-            >
-              {isRtl ? 'حديقة التسلية' : 'Central Park'}
-            </text>
-
-            <rect 
-              x={park2Center.x - park2W / 2} 
-              y={park2Center.y - park2H / 2} 
-              width={park2W} 
-              height={park2H} 
-              rx="6" 
-              fill="rgba(34, 197, 94, 0.12)" 
-              stroke="rgba(34, 197, 94, 0.25)" 
-              strokeWidth="1.5" 
-            />
-
-            {/* Lake */}
-            <ellipse 
-              cx={lakeCenter.x} 
-              cy={lakeCenter.y} 
-              rx={lakeW / 2} 
-              ry={lakeH / 2} 
-              fill="rgba(14, 165, 233, 0.16)" 
-              stroke="rgba(14, 165, 233, 0.3)" 
-              strokeWidth="1.5" 
-            />
-            <text 
-              x={lakeCenter.x} 
-              y={lakeCenter.y} 
-              fill="rgba(3, 105, 161, 0.5)" 
-              fontSize="9" 
-              fontWeight="bold" 
-              textAnchor="middle"
-            >
-              {isRtl ? 'بحيرة سيدي بلعباس' : 'Bel Abbès Lake'}
-            </text>
-
-            {/* Winding river path */}
-            {riverPoints[0] && (
-              <path 
-                d={`M ${riverPoints[0].x} ${riverPoints[0].y} 
-                    Q ${riverPoints[1].x} ${riverPoints[1].y}, ${riverPoints[2].x} ${riverPoints[2].y} 
-                    T ${riverPoints[4].x} ${riverPoints[4].y}`} 
-                fill="none" 
-                stroke="rgba(14, 165, 233, 0.25)" 
-                strokeWidth="10" 
-                strokeLinecap="round" 
+          <div className="flex items-start gap-3">
+            {/* Business Image */}
+            <div className="relative h-16 w-16 sm:h-20 sm:w-20 rounded-2xl overflow-hidden bg-muted shrink-0 border">
+              <img 
+                src={activeItem.images[0] || 'https://placehold.co/200x200.png'} 
+                alt={activeItem.name}
+                className="w-full h-full object-cover"
               />
-            )}
+              <Badge className="absolute bottom-1 left-1 text-[9px] px-1 py-0 h-4 bg-black/60 text-white border-0">
+                ★ {activeItem.averageRating.toFixed(1)}
+              </Badge>
+            </div>
 
-            {/* Roads */}
-            <line x1={rdSouidaniStart.x} y1={rdSouidaniStart.y} x2={rdSouidaniEnd.x} y2={rdSouidaniEnd.y} stroke="rgba(148,163,184,0.2)" strokeWidth="8" strokeLinecap="round" />
-            <line x1={rdRepubliqueStart.x} y1={rdRepubliqueStart.y} x2={rdRepubliqueEnd.x} y2={rdRepubliqueEnd.y} stroke="rgba(148,163,184,0.2)" strokeWidth="8" strokeLinecap="round" />
-            <line x1={rdZabanaStart.x} y1={rdZabanaStart.y} x2={rdZabanaEnd.x} y2={rdZabanaEnd.y} stroke="rgba(148,163,184,0.2)" strokeWidth="6" strokeLinecap="round" />
-
-            <line x1={rdSouidaniStart.x} y1={rdSouidaniStart.y} x2={rdSouidaniEnd.x} y2={rdSouidaniEnd.y} stroke="white" strokeWidth="4" strokeLinecap="round" />
-            <line x1={rdRepubliqueStart.x} y1={rdRepubliqueStart.y} x2={rdRepubliqueEnd.x} y2={rdRepubliqueEnd.y} stroke="white" strokeWidth="4" strokeLinecap="round" />
-            <line x1={rdZabanaStart.x} y1={rdZabanaStart.y} x2={rdZabanaEnd.x} y2={rdZabanaEnd.y} stroke="white" strokeWidth="3" strokeLinecap="round" />
-
-            <g transform={`translate(${(rdSouidaniStart.x + rdSouidaniEnd.x)/2 - 50}, ${rdSouidaniStart.y - 6})`}>
-              <text fill="rgba(100, 116, 139, 0.45)" fontSize="7" fontWeight="bold" letterSpacing="1">
-                BOULEVARD SOUIDANI
-              </text>
-            </g>
-
-            {/* Search Radius */}
-            {userXY && (
-              <circle
-                cx={userXY.x}
-                cy={userXY.y}
-                r={radius * (10 + (15 - zoomLevel) * 2)}
-                fill="url(#radiusGlow)"
-                stroke="hsl(var(--primary))"
-                strokeWidth="1.5"
-                strokeDasharray="4 4"
-                className="transition-all duration-300"
-              />
-            )}
-
-            {/* Directions Line */}
-            {userXY && selectedListing && (
-              (() => {
-                const idx = listings.findIndex(l => l.id === selectedListing.id);
-                if (idx !== -1) {
-                  const targetCoords = listingsWithCoords[idx];
-                  const targetXY = getXY(targetCoords.lat, targetCoords.lng);
-                  return (
-                    <>
-                      <line 
-                        x1={userXY.x} 
-                        y1={userXY.y} 
-                        x2={targetXY.x} 
-                        y2={targetXY.y} 
-                        stroke="hsl(var(--primary))" 
-                        strokeWidth="2" 
-                        strokeDasharray="5 3" 
-                        className="animate-pulse"
-                      />
-                      <path
-                        d={`M ${userXY.x} ${userXY.y} L ${targetXY.x} ${targetXY.y}`}
-                        fill="none"
-                        stroke="rgba(16, 185, 129, 0.3)"
-                        strokeWidth="5"
-                        strokeLinecap="round"
-                      />
-                    </>
-                  );
-                }
-                return null;
-              })()
-            )}
-
-            {/* Markers */}
-            {filteredListings.map((item) => {
-              const xy = getXY(item.lat, item.lng);
-              const isSelected = selectedListing?.id === item.id;
-              const isHovered = hoveredListingId === item.id;
-
-              if (xy.x < 0 || xy.x > mapWidth || xy.y < 0 || xy.y > mapHeight) return null;
-
-              return (
-                <g 
-                  key={item.id} 
-                  transform={`translate(${xy.x}, ${xy.y})`} 
-                  onClick={() => onMarkerClick && onMarkerClick(item)}
-                  onMouseEnter={() => setHoveredListingId(item.id)}
-                  onMouseLeave={() => setHoveredListingId(null)}
-                  className="cursor-pointer group select-none"
+            {/* Business Info Details */}
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="flex items-center justify-between gap-1">
+                <h4 className="font-headline font-bold text-sm text-foreground truncate">
+                  {activeItem.name}
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveItem(null);
+                    mapStateManager.setSelectedBusiness(null);
+                  }}
+                  className="h-6 w-6 rounded-full hover:bg-muted flex items-center justify-center text-muted-foreground"
                 >
-                  {isSelected && (
-                    <circle r="20" fill="hsl(var(--primary))" className="animate-ping opacity-25" />
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <p className="text-xs text-muted-foreground truncate">
+                {activeItem.location?.city} • {activeItem.category}
+              </p>
+
+              {/* Real Distance and Accuracy Info */}
+              {userLocationState && (
+                <div className="flex items-center gap-1 text-[11px] font-bold text-blue-600 dark:text-blue-400">
+                  <Compass className="h-3 w-3" />
+                  <span>{getItemDistance(activeItem)} {isRtl ? 'من موقعك' : 'from you'}</span>
+                  {userLocationState.accuracy && (
+                    <span className="text-[10px] text-muted-foreground font-normal">
+                      (±{userLocationState.accuracy}m)
+                    </span>
                   )}
-                  <circle cy="3" r="8" fill="black" opacity="0.12" />
-                  <path 
-                    d="M0 -15 C-7 -15 -7 -7 0 0 C7 -7 7 -15 0 -15 Z" 
-                    fill={isSelected ? "hsl(var(--primary))" : "hsl(var(--destructive))"}
-                    className="transition-all duration-200 group-hover:scale-110 origin-bottom"
-                  />
-                  <circle cy="-10" r="4" fill="white" />
+                </div>
+              )}
 
-                  {isHovered && (
-                    <g transform="translate(0, -28)" className="pointer-events-none filter drop-shadow-md z-50">
-                      <rect x="-70" y="-45" width="140" height="42" rx="8" fill="white" stroke="#e2e8f0" strokeWidth="1" />
-                      <text x="-62" y="-32" fill="#0f172a" fontSize="8.5" fontWeight="bold" textAnchor="start">
-                        {item.name.substring(0, 20)}
-                      </text>
-                      <text x="-62" y="-20" fill="#eab308" fontSize="8" fontWeight="bold" textAnchor="start">
-                        ★ {item.averageRating.toFixed(1)} • {item.pricing || '$$'}
-                      </text>
-                      <text x="-62" y="-10" fill="#64748b" fontSize="7" fontWeight="medium" textAnchor="start">
-                        {item.category}
-                      </text>
-                      <polygon points="-5,0 5,0 0,5" fill="white" stroke="#e2e8f0" strokeWidth="1" />
-                      <polygon points="-5,-0.5 5,-0.5 0,4.5" fill="white" />
-                    </g>
-                  )}
-                </g>
-              );
-            })}
+              {/* 3 Primary In-App Action Buttons */}
+              <div className="flex items-center gap-1.5 pt-2">
+                <Button
+                  size="sm"
+                  onClick={() => handleGetDirections(activeItem)}
+                  disabled={isCalculatingRoute}
+                  className="h-8 text-xs font-bold rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 flex-1 shadow-sm gap-1"
+                >
+                  {isCalculatingRoute ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Navigation className="h-3.5 w-3.5" />}
+                  <span>{isRtl ? 'الاتجاهات' : 'Directions'}</span>
+                </Button>
 
-            {/* User marker */}
-            {userXY && (
-              <g transform={`translate(${userXY.x}, ${userXY.y})`}>
-                <circle r="12" fill="rgba(59, 130, 246, 0.25)" className="animate-pulse" />
-                <circle r="6.5" fill="white" stroke="#3b82f6" strokeWidth="2" />
-                <circle r="3" fill="#3b82f6" />
-              </g>
-            )}
-          </svg>
-        )}
-      </div>
+                {activeItem.contact?.phone && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    asChild
+                    className="h-8 text-xs font-bold rounded-xl"
+                  >
+                    <a href={`tel:${activeItem.contact.phone}`}>
+                      <Phone className="h-3.5 w-3.5" />
+                    </a>
+                  </Button>
+                )}
 
-      {/* Bottom Listing Snippet Panel */}
-      {selectedListing && (
-        <div className="bg-popover border-t p-3.5 flex items-center justify-between gap-3 animate-in slide-in-from-bottom duration-250 z-20">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="h-10 w-10 bg-primary/10 text-primary flex items-center justify-center rounded-xl shrink-0">
-              <MapPin className="h-5 w-5" />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  asChild
+                  className="h-8 text-xs font-bold rounded-xl"
+                >
+                  <a href={`/listings/${activeItem.id}`}>
+                    {language === 'ar' ? 'زيارة' : language === 'fr' ? 'Visiter' : 'Visit'}
+                    <ExternalLink className="h-3 w-3 ml-1" />
+                  </a>
+                </Button>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h4 className="font-bold text-sm text-foreground truncate">{selectedListing.name}</h4>
-              <p className="text-xs text-muted-foreground truncate">{selectedListing.location.fullAddress || selectedListing.location.city}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => handleOpenStreetView(selectedListing)}
-              className="text-xs font-semibold flex items-center gap-1"
-            >
-              <Eye className="h-3.5 w-3.5 text-primary" />
-              {isRtl ? 'عرض الشارع' : 'Street View'}
-            </Button>
-            {selectedListing.contact.phone && (
-              <Button
-                type="button"
-                variant="default"
-                size="sm"
-                asChild
-                className="text-xs font-semibold bg-primary hover:bg-primary/95 text-primary-foreground flex items-center gap-1"
-              >
-                <a href={`tel:${selectedListing.contact.phone}`}>
-                  <Navigation className="h-3.5 w-3.5" />
-                  {isRtl ? 'اتصال' : 'Call'}
-                </a>
-              </Button>
-            )}
           </div>
         </div>
       )}
 
-      {/* Street View Simulation Modal */}
-      {isStreetViewOpen && streetViewListing && (
-        <div className="absolute inset-0 bg-slate-950 z-50 flex flex-col animate-in fade-in duration-300">
-          <div className="p-4 bg-slate-900 border-b border-slate-800 flex items-center justify-between z-10 text-white select-none">
-            <div>
-              <h3 className="font-headline font-bold text-base flex items-center gap-1.5">
-                <Eye className="text-primary h-5 w-5" />
-                {isRtl ? 'محاكاة عرض الشارع 360 درجة' : 'Simulated 360° Street View'}
-              </h3>
-              <p className="text-xs text-slate-400 font-medium">{streetViewListing.name}</p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsStreetViewOpen(false)}
-              className="text-slate-400 hover:text-white rounded-full hover:bg-slate-800 h-8 w-8 p-0"
-            >
-              <X className="h-5 w-5" />
-            </Button>
-          </div>
-
-          <div className="flex-1 relative overflow-hidden bg-black flex items-center justify-center">
-            <div 
-              className="absolute inset-0 flex items-center justify-center transition-transform duration-75 ease-out select-none"
-              style={{ 
-                transform: `scale(1.2) rotateY(${streetViewRotation}deg)`, 
-                perspective: '1000px'
-              }}
-            >
-              <div className="w-[1200px] h-[600px] relative shrink-0 flex items-center justify-center gap-2">
-                <img 
-                  src={streetViewListing.images[0] || 'https://placehold.co/800x450.png'} 
-                  alt="street view front" 
-                  className="w-[400px] h-[300px] object-cover rounded-xl border border-slate-700 shadow-2xl" 
-                />
-                <img 
-                  src={streetViewListing.images[1] || 'https://placehold.co/800x450.png'} 
-                  alt="street view side" 
-                  className="w-[400px] h-[300px] object-cover rounded-xl border border-slate-700 shadow-2xl" 
-                />
-                <img 
-                  src={streetViewListing.images[2] || streetViewListing.images[0] || 'https://placehold.co/800x450.png'} 
-                  alt="street view back" 
-                  className="w-[400px] h-[300px] object-cover rounded-xl border border-slate-700 shadow-2xl" 
-                />
-              </div>
-            </div>
-
-            <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-6">
-              <div className="self-center bg-slate-900/80 backdrop-blur-sm border border-slate-800 text-xs px-3 py-1.5 rounded-full text-slate-300 font-semibold select-none shadow-md">
-                {isRtl ? 'اسحب الخريطة للتدوير 360°' : 'Use controls or drag image to rotate 360°'}
-              </div>
-              <div className="flex items-center justify-between text-slate-400 text-xs select-none">
-                <span>W (270°)</span>
-                <span className="text-white font-bold bg-primary/20 border border-primary/40 px-3 py-1 rounded-md">Compass: {Math.abs(streetViewRotation) % 360}°</span>
-                <span>E (90°)</span>
-              </div>
-            </div>
-
-            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 z-10 pointer-events-auto bg-slate-900/90 border border-slate-800 py-2.5 px-6 rounded-full shadow-2xl">
-              <button 
-                onClick={() => setStreetViewRotation(prev => prev - 25)}
-                className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-full transition-colors"
-                title="Rotate Left"
-              >
-                <ChevronLeft className="h-5 w-5" />
-              </button>
-              <span className="text-white font-headline text-sm font-semibold select-none">360° Pan Control</span>
-              <button 
-                onClick={() => setStreetViewRotation(prev => prev + 25)}
-                className="p-2 bg-slate-800 hover:bg-slate-700 text-white rounded-full transition-colors"
-                title="Rotate Right"
-              >
-                <ChevronRight className="h-5 w-5" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// Sub-icons
-function ChevronLeft(props: React.SVGProps<SVGSVGElement>) {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-5 w-5" {...props}><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" /></svg>;
-}
-function ChevronRight(props: React.SVGProps<SVGSVGElement>) {
-  return <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="h-5 w-5" {...props}><path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" /></svg>;
-}
+export default InteractiveMap;

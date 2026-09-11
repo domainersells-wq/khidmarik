@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { categories } from '@/data/mock';
 import { MadeInAlgeriaBadge } from './MadeInAlgeriaBadge';
 import { mapPlanToTier, TIER_THEMES } from '@/lib/subscriptionTheme';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface ListingCardProps {
   listing: Listing;
@@ -17,6 +18,7 @@ interface ListingCardProps {
 }
 
 export function ListingCard({ listing, currentUserLocationQuery }: ListingCardProps) {
+  const { language } = useLanguage();
   const categoryDetails = categories.find(c => c.name === listing.category);
   const CategoryIcon = categoryDetails?.icon;
 
@@ -152,8 +154,10 @@ export function ListingCard({ listing, currentUserLocationQuery }: ListingCardPr
         </div>
       </CardContent>
       <CardFooter className="p-4 border-t">
-        <Button asChild variant="default" className="w-full bg-primary hover:bg-primary/90 text-primary-foreground">
-          <Link href={`/listings/${listing.id}`}>View Details</Link>
+        <Button asChild variant="default" className="w-full bg-primary hover:bg-primary/90 text-primary-foreground font-bold">
+          <Link href={`/listings/${listing.id}`}>
+            {language === 'ar' ? 'زيارة' : language === 'fr' ? 'Visiter' : 'Visit'}
+          </Link>
         </Button>
       </CardFooter>
     </Card>

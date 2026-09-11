@@ -2,6 +2,7 @@
 'use client';
 
 import { AdminDashboardSidebar } from '@/components/admin/AdminDashboardSidebar';
+import { AdminHeader } from '@/components/admin/AdminHeader';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { PanelLeft } from 'lucide-react';
@@ -27,25 +28,22 @@ export default function AdminDashboardLayout({
           />
         </div>
         <div className={cn(
-          "flex flex-col flex-1 transition-all duration-300 ease-in-out",
+          "flex flex-col flex-1 min-w-0 transition-all duration-300 ease-in-out",
           isCollapsed 
             ? "ltr:md:ml-[80px] rtl:md:mr-[80px]" 
             : "ltr:md:ml-[300px] rtl:md:mr-[300px]"
         )}>
-          <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b bg-background px-4 sm:static sm:h-auto sm:border-0 sm:bg-transparent sm:px-6 md:hidden">
-            <Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
-              <SheetTrigger asChild>
-                <Button size="icon" variant="outline" className="sm:hidden">
-                  <PanelLeft className="h-5 w-5" />
-                  <span className="sr-only">Toggle Menu</span>
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="sm:max-w-xs p-0">
-                <AdminDashboardSidebar onLinkClick={() => setIsSidebarOpen(false)} />
-              </SheetContent>
-            </Sheet>
-          </header>
-          <main className="flex-1 p-4 sm:px-6 sm:py-0 md:gap-8">{children}</main>
+          {/* Universal Sticky Admin Header with live Top-up alerts and Notification bell */}
+          <AdminHeader onMobileMenuToggle={() => setIsSidebarOpen(true)} />
+
+          {/* Mobile Navigation Drawer Sheet */}
+          <Sheet open={isSidebarOpen} onOpenChange={setIsSidebarOpen}>
+            <SheetContent side="left" className="sm:max-w-xs p-0 border-r border-border">
+              <AdminDashboardSidebar onLinkClick={() => setIsSidebarOpen(false)} />
+            </SheetContent>
+          </Sheet>
+
+          <main className="flex-1 p-4 sm:px-6 sm:py-4 md:gap-8">{children}</main>
         </div>
       </div>
     </RouteGuard>

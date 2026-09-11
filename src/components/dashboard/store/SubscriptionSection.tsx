@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useToast } from '@/hooks/use-toast';
+import { useAuth } from '@/context/AuthContext';
+import { supabase } from '@/lib/supabase';
 import { SubscriptionPaymentModal } from '@/components/dashboard/professional-services/SubscriptionPaymentModal';
 import { PlanDetail } from '@/components/dashboard/professional-services/SubscriptionPlansModal';
 
@@ -48,6 +50,7 @@ export function SubscriptionSection() {
   const { language } = useLanguage();
   const isAr = language === 'ar';
   const { toast } = useToast();
+  const { user } = useAuth();
 
   const [currentPlanKey, setCurrentPlanKey] = useState<'basic' | 'pro' | 'agency'>('agency');
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly');
@@ -56,6 +59,51 @@ export function SubscriptionSection() {
   // Payment Modal
   const [selectedPlanForPayment, setSelectedPlanForPayment] = useState<PlanDetail | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+
+  // Load real store subscription plan and transactions from Supabase
+  useEffect(() => {
+    if (!user) return;
+    const fetchStorePlan = async () => {
+      try {
+        let q = supabase.from('stores').select('id, subscription_plan');
+        if (user.storeId) {
+          q = q.eq('id', user.storeId);
+        } else if (user.id) {
+          q = q.eq('owner_id', user.id);
+        }
+        const { data: storeData } = await q.maybeSingle();
+        if (storeData?.subscription_plan) {
+          const p = storeData.subscription_plan.toLowerCase();
+          if (p.includes('basic') || p.includes('starter')) setCurrentPlanKey('basic');
+          else if (p.includes('pro') || p.includes('gold')) setCurrentPlanKey('pro');
+          else if (p.includes('agency') || p.includes('vip') || p.includes('diamond')) setCurrentPlanKey('agency');
+        }
+
+        // Fetch user subscription transactions
+        const { data: txs } = await supabase
+          .from('transactions')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('type', 'subscription')
+          .order('created_at', { ascending: false });
+
+        if (txs && txs.length > 0) {
+          const mappedTxs: InvoiceHistory[] = txs.map((t: any) => ({
+            invoiceId: t.transaction_code || `INV-SUB-${t.id.slice(0, 4)}`,
+            billingDate: (t.created_at || new Date().toISOString()).slice(0, 10),
+            amountDA: parseFloat(t.amount || 0),
+            paymentMethod: t.method || 'Edahabia / BaridiMob',
+            status: 'paid',
+            planName: isAr ? 'اشتراك متجر معتمد' : 'Verified Store Subscription'
+          }));
+          setInvoices(mappedTxs);
+        }
+      } catch (err) {
+        console.warn('Could not sync store subscription plan from Supabase:', err);
+      }
+    };
+    fetchStorePlan();
+  }, [user, isAr]);
 
   const plans = [
     {
@@ -142,37 +190,83 @@ export function SubscriptionSection() {
       return;
     }
 
+    const chosenPrice = billingCycle === 'monthly' ? planObj.monthlyPriceDA : planObj.yearlyPriceDA;
+    const tierMap: Record<string, any> = {
+      basic: 'bronze',
+      pro: 'gold',
+      agency: 'diamond'
+    };
+
     const planDetail: PlanDetail = {
-      name: isAr ? planObj.nameAr : planObj.nameEn,
-      price: billingCycle === 'monthly' ? `${planObj.monthlyPriceDA.toLocaleString()} DA` : `${planObj.yearlyPriceDA.toLocaleString()} DA`,
-      priceNumberDA: billingCycle === 'monthly' ? planObj.monthlyPriceDA : planObj.yearlyPriceDA,
-      features: isAr ? planObj.featuresAr : planObj.featuresEn
+      tier: tierMap[planObj.key] || 'gold',
+      nameAr: planObj.nameAr,
+      nameEn: planObj.nameEn,
+      price: chosenPrice,
+      periodAr: billingCycle === 'monthly' ? '/ شهر' : '/ سنة',
+      periodEn: billingCycle === 'monthly' ? '/ month' : '/ year',
+      badgeAr: (planObj as any).badgeAr || 'باقة مميزة',
+      badgeEn: (planObj as any).badgeEn || 'PRO',
+      descriptionAr: planObj.nameAr,
+      descriptionEn: planObj.nameEn,
+      featuresAr: planObj.featuresAr,
+      featuresEn: planObj.featuresEn
     };
 
     setSelectedPlanForPayment(planDetail);
     setIsPaymentModalOpen(true);
   };
 
-  const handlePaymentSuccess = (plan: PlanDetail, paymentMethod: string, txRef: string) => {
-    const matchedKey = plans.find(p => p.nameAr.includes(plan.name) || p.nameEn.includes(plan.name))?.key || 'pro';
+  const handlePaymentSuccess = async (plan: PlanDetail, paymentMethod: string, txRef: string) => {
+    const reverseTierMap: Record<string, string> = {
+      bronze: 'basic',
+      gold: 'pro',
+      diamond: 'agency'
+    };
+    const matchedKey = reverseTierMap[plan.tier] || plans.find(p => p.nameAr === plan.nameAr || p.nameEn === plan.nameEn)?.key || 'pro';
     setCurrentPlanKey(matchedKey as any);
     setIsPaymentModalOpen(false);
 
-    // Add new paid invoice record
+    const generatedCode = txRef || `INV-SUB-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    // Add new paid invoice record in local UI
     const newInvoice: InvoiceHistory = {
-      invoiceId: `INV-SUB-${Math.floor(1000 + Math.random() * 9000)}`,
+      invoiceId: generatedCode,
       billingDate: new Date().toISOString().slice(0, 10),
-      amountDA: plan.priceNumberDA,
+      amountDA: plan.price,
       paymentMethod: paymentMethod === 'edahabia' ? 'Edahabia / CIB 3DS' : paymentMethod === 'baridimob' ? 'BaridiMob Transfer' : 'Khidmatik Wallet Balance',
       status: 'paid',
-      planName: plan.name
+      planName: isAr ? plan.nameAr : plan.nameEn
     };
 
     setInvoices(prev => [newInvoice, ...prev]);
 
+    // Persist to Supabase stores and transactions
+    if (user) {
+      try {
+        // 1. Update store subscription plan
+        if (user.storeId) {
+          await supabase.from('stores').update({ subscription_plan: matchedKey }).eq('id', user.storeId);
+        } else if (user.id) {
+          await supabase.from('stores').update({ subscription_plan: matchedKey }).eq('owner_id', user.id);
+        }
+
+        // 2. Record transaction
+        await supabase.from('transactions').insert({
+          user_id: user.id,
+          amount: plan.price,
+          type: 'subscription',
+          status: 'completed',
+          method: paymentMethod,
+          transaction_code: generatedCode
+        });
+      } catch (err) {
+        console.error('Error recording subscription in database:', err);
+      }
+    }
+
     toast({
       title: isAr ? '🎉 تم ترقية وتجديد الاشتراك بنجاح!' : '🎉 Subscription Upgraded Successfully!',
-      description: isAr ? `تم تفعيل اشتراك ${plan.name} وتحديث مزايا متجرك فورياً.` : `Your store features have been instantly unlocked.`
+      description: isAr ? `تم تفعيل اشتراك ${plan.nameAr} وتحديث مزايا متجرك فورياً.` : `Your store features have been instantly unlocked.`
     });
   };
 

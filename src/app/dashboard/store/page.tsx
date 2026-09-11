@@ -10,7 +10,6 @@ import { MarketingSection } from '@/components/dashboard/store/MarketingSection'
 import { AnalyticsSection } from '@/components/dashboard/store/AnalyticsSection';
 import { SettingsSection } from '@/components/dashboard/store/SettingsSection';
 import { FinancialsSection } from '@/components/dashboard/store/FinancialsSection'; // New
-import { AISellerAssistantSection } from '@/components/dashboard/store/AISellerAssistantSection'; // New
 import { ShipmentsSection } from '@/components/dashboard/store/ShipmentsSection'; // New
 
 // New Sections
@@ -85,8 +84,6 @@ export default function StoreDashboardPage() {
         return <SubscriptionSection />;
       case 'webhooks':
         return <WebhooksSection />;
-      case 'ai-assistant': // New
-        return <AISellerAssistantSection />;
       case 'analytics':
         return <AnalyticsSection />;
       case 'reviews':

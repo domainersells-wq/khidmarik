@@ -1,18 +1,22 @@
-
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import {
   CreditCard, Landmark, FileText, PackageCheck, AlertCircle,
   CheckCircle, ArrowRight, ArrowLeft, Wallet, Copy, ShieldCheck,
-  BadgeCheck, Clock, CircleDollarSign, Banknote
+  BadgeCheck, Clock, CircleDollarSign, AlertTriangle, UserCheck
 } from 'lucide-react';
+import { financialService } from '@/services/financialService';
+import { TopUpRequest, TopUpMethod } from '@/types/financials';
 import type { TopUpTransaction } from '@/types';
+import { useAuth } from '@/context/AuthContext';
+import { ThinkingOrbs } from '@/components/ui/thinking-orbs';
 
 interface TopUpDialogProps {
   currentBalance: number;
@@ -21,110 +25,159 @@ interface TopUpDialogProps {
 }
 
 type TopUpStep = 'enterAmount' | 'selectMethod' | 'paymentInstructions' | 'confirmCompletion';
-type PaymentMethod = 'ccp' | 'bank' | 'edahabia' | 'other_online';
-
-const mockCompanyAccounts = {
-  ccp: { name: "Khidmatik SARL", accountNumber: "1234567890", key: "12", address: "BP 1000, Sidi Bel Abbès Principal" },
-  bank: { name: "Khidmatik SARL", bankName: "Banque Nationale d'Algérie (BNA)", rib: "001 00123 012345678901 23", swift: "BNAADZALXXX" }
-};
 
 const STEPS: TopUpStep[] = ['enterAmount', 'selectMethod', 'paymentInstructions', 'confirmCompletion'];
-const STEP_LABELS = ['المبلغ', 'الطريقة', 'التعليمات', 'التأكيد'];
+const STEP_LABELS = ['المبلغ', 'الطريقة', 'التعليمات', 'تأكيد التحويل'];
 
 export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDialogProps) {
   const { toast } = useToast();
+  const { user: authUser } = useAuth();
   const [step, setStep] = useState<TopUpStep>('enterAmount');
-  const [amount, setAmount] = useState<string>('');
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod | ''>('');
-  const [generatedTransactionCode, setGeneratedTransactionCode] = useState('');
+  const [amount, setAmount] = useState<string>('20000');
+  const [selectedMethod, setSelectedMethod] = useState<TopUpMethod | ''>('ccp');
+  
+  // Real created Top-Up request from backend
+  const [createdTopUp, setCreatedTopUp] = useState<TopUpRequest | null>(null);
+  const [postalTransactionCode, setPostalTransactionCode] = useState('');
+  const [senderName, setSenderName] = useState(authUser?.name || '');
+  const [senderAccount, setSenderAccount] = useState('');
+  const [transferDate, setTransferDate] = useState(new Date().toISOString().split('T')[0]);
+  const [userNotes, setUserNotes] = useState('');
   const [copied, setCopied] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const currentStepIndex = STEPS.indexOf(step);
 
-  const handleCopyCode = () => {
-    navigator.clipboard.writeText(generatedTransactionCode).catch(() => {});
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleAmountSubmit = () => {
-    if (parseFloat(amount) <= 0 || isNaN(parseFloat(amount))) {
-      toast({ title: "مبلغ غير صالح", description: "يرجى إدخال مبلغ صحيح.", variant: "destructive" });
+    const numAmount = parseFloat(amount);
+    if (numAmount < 500 || isNaN(numAmount)) {
+      toast({ title: "مبلغ غير صالح", description: "الحد الأدنى للشحن هو 500 DA.", variant: "destructive" });
       return;
     }
     setStep('selectMethod');
   };
 
-  const handleMethodSelect = (method: PaymentMethod) => {
-    if (method === 'edahabia' || method === 'other_online') {
-      toast({ title: "قريباً!", description: `الدفع عبر ${method} غير متاح بعد.` });
-      return;
-    }
+  const handleMethodSelect = (method: TopUpMethod) => {
     setSelectedMethod(method);
-    setGeneratedTransactionCode(`REF-KH-${Date.now().toString().slice(-6)}`);
     setStep('paymentInstructions');
   };
 
   const handleConfirmTransfer = () => {
-    if (!selectedMethod || !generatedTransactionCode || !amount) return;
-    const newTransaction: TopUpTransaction = {
-      id: `tu-${Date.now()}`,
-      userId: 'currentUser',
-      amount: parseFloat(amount),
-      method: selectedMethod as 'ccp' | 'bank',
-      status: 'pending-review',
-      transactionCode: generatedTransactionCode,
-      createdAt: new Date().toISOString(),
-    };
-    onTopUpSuccess(newTransaction);
-    toast({
-      title: "✅ تم إرسال طلب الشحن",
-      description: `طلبك بمبلغ ${parseFloat(amount).toFixed(2)} DA قيد المراجعة. (Ref: ${generatedTransactionCode})`,
-      duration: 7000,
-    });
-    onClose();
+    if (!postalTransactionCode.trim()) {
+      toast({
+        title: "رمز العملية البريدية مطلوب",
+        description: "يرجى كتابة رقم العملية المذكور في وصل التحويل لمطابقة الدفعة.",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const numAmount = parseFloat(amount);
+      const resolvedUserId = financialService.normalizeUserId(authUser?.id);
+      
+      const result = financialService.submitUserTopUpRequest({
+        userId: resolvedUserId,
+        userName: authUser?.name || 'Ahmed Benali',
+        userEmail: authUser?.email || 'admin@khidmatik.dz',
+        userPhone: (authUser as any)?.phone || '',
+        accountType: 'client',
+        amount: numAmount,
+        paymentMethod: (selectedMethod || 'baridimob') as TopUpMethod,
+        postalTransactionCode: postalTransactionCode.trim(),
+        senderName: senderName.trim() || authUser?.name || 'Client',
+        senderAccount: senderAccount.trim(),
+        transferDate,
+        userNotes: userNotes.trim(),
+      });
+
+      if (!result.success || !result.topUp) {
+        toast({
+          title: "تعذر إرسال إثبات التحويل",
+          description: result.error || "يرجى التأكد من صحة البيانات",
+          variant: "destructive"
+        });
+        return;
+      }
+
+      const createdReq = result.topUp;
+
+      // Format standardized transaction for profile state
+      const legacyTx: TopUpTransaction = {
+        id: createdReq.id,
+        userId: resolvedUserId,
+        amount: createdReq.amount,
+        method: createdReq.paymentMethod as any,
+        status: 'pending-review',
+        transactionCode: createdReq.publicRequestNumber,
+        createdAt: new Date().toISOString(),
+      };
+
+      onTopUpSuccess(legacyTx);
+      toast({
+        title: "✅ تم إرسال طلب الشحن للإدارة بنجاح",
+        description: `رقم الطلب (${createdReq.publicRequestNumber}) قيد المراجعة والمطابقة المالية من قِبل إدارة منصة خدماتك.`,
+        duration: 8000,
+      });
+      onClose();
+    } catch (e: any) {
+      toast({
+        title: "خطأ في الاتصال",
+        description: e.message || "حدث خطأ غير متوقع",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const quickAmounts = [1000, 2000, 5000, 10000, 20000, 50000];
 
   return (
-    <DialogContent className="sm:max-w-lg p-0 overflow-hidden border-0 shadow-2xl">
-      {/* Gradient Header */}
-      <div className="bg-gradient-to-br from-primary/90 via-primary/70 to-primary/50 px-6 pt-6 pb-5 text-white">
+    <DialogContent className="sm:max-w-lg p-0 overflow-hidden border-0 shadow-2xl rounded-2xl">
+      {/* Header */}
+      <div className="bg-gradient-to-br from-primary via-primary/90 to-primary/80 px-6 pt-6 pb-5 text-primary-foreground">
         <div className="flex items-center gap-3 mb-3">
-          <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm">
+          <div className="p-2.5 bg-white/15 rounded-xl backdrop-blur-md">
             <Wallet className="h-5 w-5 text-white" />
           </div>
           <div>
             <DialogTitle className="text-white text-base font-bold font-headline">
-              {step === 'enterAmount' && 'شحن المحفظة / Top Up Wallet'}
-              {step === 'selectMethod' && 'طريقة الدفع / Payment Method'}
-              {step === 'paymentInstructions' && `تعليمات ${selectedMethod?.toUpperCase()} Transfer`}
-              {step === 'confirmCompletion' && 'تأكيد التحويل / Confirm Transfer'}
+              {step === 'enterAmount' && 'شحن المحفظة الرقمية / Top Up Wallet'}
+              {step === 'selectMethod' && 'اختيار طريقة الدفع / Payment Method'}
+              {step === 'paymentInstructions' && 'بيانات حساب منصة خدماتك للتحويل'}
+              {step === 'confirmCompletion' && 'تأكيد إرسال رمز العملية البريدية'}
             </DialogTitle>
-            <DialogDescription className="text-white/70 text-[10px] mt-0.5">
-              الرصيد الحالي: <strong className="text-white">{currentBalance.toFixed(2)} DA</strong>
+            <DialogDescription className="text-white/80 text-xs mt-0.5">
+              الرصيد المتاح الحالي: <strong className="text-white font-mono" dir="ltr">{currentBalance.toFixed(2)} DA</strong>
             </DialogDescription>
           </div>
         </div>
 
         {/* Step progress dots */}
-        <div className="flex items-center gap-1.5 mt-2">
+        <div className="flex items-center gap-1.5 mt-3">
           {STEPS.map((s, i) => (
             <div key={s} className="flex items-center gap-1.5">
-              <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold transition-all ${
+              <div className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold transition-all ${
                 i === currentStepIndex
-                  ? 'bg-white text-primary'
+                  ? 'bg-white text-primary shadow-xs'
                   : i < currentStepIndex
                   ? 'bg-white/30 text-white'
                   : 'bg-white/10 text-white/50'
               }`}>
                 {i < currentStepIndex ? (
-                  <CheckCircle className="h-2.5 w-2.5" />
+                  <CheckCircle className="h-3 w-3" />
                 ) : (
                   <span>{i + 1}</span>
                 )}
-                <span className="hidden sm:inline">{STEP_LABELS[i]}</span>
+                <span>{STEP_LABELS[i]}</span>
               </div>
               {i < STEPS.length - 1 && (
                 <div className={`h-px w-4 transition-all ${i < currentStepIndex ? 'bg-white/60' : 'bg-white/20'}`} />
@@ -135,14 +188,14 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
       </div>
 
       {/* Body */}
-      <div className="px-6 py-5 space-y-4 bg-background">
+      <div className="px-6 py-5 space-y-4 bg-background max-h-[70vh] overflow-y-auto">
 
         {/* ── Step 1: Enter Amount ── */}
         {step === 'enterAmount' && (
           <div className="space-y-4">
             <div>
-              <Label htmlFor="topup-amount" className="text-xs font-semibold mb-2 block">
-                المبلغ المراد شحنه (DA)
+              <Label htmlFor="topup-amount" className="text-xs font-bold mb-2 block text-foreground">
+                المبلغ المراد شحنه إلى رصيدك بالدينار الجزائري (DA) *
               </Label>
               <div className="relative">
                 <CircleDollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -152,25 +205,29 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   placeholder="أدخل المبلغ..."
-                  min="100"
-                  className="pl-9 h-11 text-sm font-semibold"
+                  min="500"
+                  className="pl-9 h-11 text-base font-bold font-mono rounded-xl"
+                  dir="ltr"
                 />
               </div>
+              <p className="text-[11px] text-muted-foreground mt-1">الحد الأدنى للشحن عبر CCP أو التحويل البنكي هو 500 DA.</p>
             </div>
 
             {/* Quick amount chips */}
             <div>
-              <p className="text-[10px] text-muted-foreground mb-2 font-medium">مبالغ سريعة:</p>
+              <p className="text-xs text-muted-foreground mb-2 font-semibold">مبالغ شائعة سريعة:</p>
               <div className="grid grid-cols-3 gap-2">
                 {quickAmounts.map(q => (
                   <button
                     key={q}
+                    type="button"
                     onClick={() => setAmount(String(q))}
-                    className={`text-xs py-1.5 rounded-lg border font-semibold transition-all hover:scale-105 ${
+                    className={`text-xs py-2 rounded-xl border font-bold font-mono transition-all hover:scale-[1.02] ${
                       amount === String(q)
-                        ? 'bg-primary text-primary-foreground border-primary shadow-md'
-                        : 'border-border hover:border-primary/50 hover:bg-primary/5'
+                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                        : 'border-border/80 hover:border-primary/50 hover:bg-muted/50 text-foreground'
                     }`}
+                    dir="ltr"
                   >
                     {q.toLocaleString()} DA
                   </button>
@@ -178,12 +235,12 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
               </div>
             </div>
 
-            {/* Balance info */}
-            <div className="bg-muted/30 rounded-xl p-3 flex items-center justify-between text-xs border border-border">
+            {/* Escrow Guarantee Notice */}
+            <div className="p-3 rounded-xl bg-muted/20 border border-border/80 flex items-center justify-between text-xs">
               <span className="text-muted-foreground flex items-center gap-1.5">
-                <Wallet className="h-3.5 w-3.5 text-primary" /> الرصيد الحالي
+                <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /> حماية الضمان الرقمي
               </span>
-              <strong className="text-accent">{currentBalance.toFixed(2)} DA</strong>
+              <strong className="text-emerald-600 dark:text-emerald-400 font-bold">مفعلة وتلقائية</strong>
             </div>
           </div>
         )}
@@ -191,148 +248,188 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
         {/* ── Step 2: Select Method ── */}
         {step === 'selectMethod' && (
           <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">اختر طريقة الدفع المناسبة لك:</p>
+            <p className="text-xs text-muted-foreground font-semibold">اختر طريقة التحويل إلى حساب منصة خدماتك:</p>
             {[
-              { id: 'ccp', icon: FileText, label: 'بريد الجزائر (CCP)', desc: 'تحويل بريدي مباشر', color: 'text-orange-500', border: 'border-orange-400/50', bg: 'hover:bg-orange-500/5', available: true },
-              { id: 'bank', icon: Landmark, label: 'تحويل بنكي', desc: 'BNA / CPA / BADR وغيرها', color: 'text-blue-500', border: 'border-blue-400/50', bg: 'hover:bg-blue-500/5', available: true },
-              { id: 'edahabia', icon: CreditCard, label: 'بطاقة Edahabia / CIB', desc: 'الدفع الإلكتروني', color: 'text-muted-foreground', border: 'border-muted', bg: '', available: false },
-              { id: 'other_online', icon: PackageCheck, label: 'طرق أخرى', desc: 'Dahabia, BaridiMob...', color: 'text-muted-foreground', border: 'border-muted', bg: '', available: false },
+              { id: 'baridimob', icon: CreditCard, label: 'تطبيق بريدي موب (BaridiMob)', desc: 'تحويل فوري عبر RIP من تطبيق الهاتف', available: true },
+              { id: 'ccp', icon: FileText, label: 'بريد الجزائر (حوالة بريدية CCP)', desc: 'تحويل يدوي في أي مكتب بريد بالجزائر', available: true },
+              { id: 'bank_transfer', icon: Landmark, label: 'تحويل بنكي رسمي (Virement BNA / CPA / BEA)', desc: 'تحويل من حساب بنكي جزائري', available: true },
             ].map(m => (
               <button
                 key={m.id}
-                onClick={() => handleMethodSelect(m.id as PaymentMethod)}
-                disabled={!m.available}
-                className={`w-full flex items-center gap-3 p-3.5 border rounded-xl text-left transition-all ${
-                  m.available
-                    ? `cursor-pointer ${m.border} ${m.bg} hover:scale-[1.01] hover:shadow-sm`
-                    : 'cursor-not-allowed opacity-40 border-muted'
-                }`}
+                type="button"
+                onClick={() => handleMethodSelect(m.id as TopUpMethod)}
+                className="w-full flex items-center gap-3.5 p-3.5 border border-border/80 rounded-xl text-right transition-all cursor-pointer hover:border-primary/50 hover:bg-muted/40 hover:shadow-xs group"
               >
-                <div className={`p-2 rounded-lg bg-muted/40 ${m.color}`}>
-                  <m.icon className="h-4 w-4" />
+                <div className="p-2.5 rounded-xl bg-primary/10 text-primary shrink-0 group-hover:scale-105 transition-transform">
+                  <m.icon className="h-5 w-5" />
                 </div>
-                <div className="flex-1">
-                  <p className={`text-xs font-bold ${m.available ? '' : 'text-muted-foreground'}`}>{m.label}</p>
-                  <p className="text-[9px] text-muted-foreground">{m.desc}</p>
+                <div className="flex-1 text-right">
+                  <p className="text-xs font-bold text-foreground">{m.label}</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{m.desc}</p>
                 </div>
-                {m.available ? (
-                  <ArrowRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                ) : (
-                  <span className="text-[8px] bg-muted px-2 py-0.5 rounded-full text-muted-foreground shrink-0">قريباً</span>
-                )}
+                <ArrowLeft className="h-4 w-4 text-muted-foreground shrink-0" />
               </button>
             ))}
           </div>
         )}
 
         {/* ── Step 3: Payment Instructions ── */}
-        {step === 'paymentInstructions' && generatedTransactionCode && (
+        {step === 'paymentInstructions' && (
           <div className="space-y-4">
-            {/* Reference code card */}
-            <div className="relative bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border-2 border-primary/30 rounded-2xl p-4 text-center">
-              <p className="text-[10px] text-muted-foreground mb-1 uppercase tracking-widest font-semibold">كود المرجع الفريد</p>
-              <p className="text-2xl font-black text-primary tracking-wider">{generatedTransactionCode}</p>
-              <button
-                onClick={handleCopyCode}
-                className="mt-2 flex items-center gap-1.5 mx-auto text-[10px] text-primary hover:text-primary/80 transition-all"
-              >
-                {copied ? <CheckCircle className="h-3 w-3 text-green-500" /> : <Copy className="h-3 w-3" />}
-                {copied ? 'تم النسخ!' : 'نسخ الكود'}
-              </button>
-            </div>
-
-            {/* Warning */}
-            <div className="bg-destructive/5 border border-destructive/20 rounded-xl p-3 flex items-start gap-2">
-              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-              <p className="text-[10px] text-destructive font-semibold leading-snug">
-                يجب إدراج هذا الكود في خانة "الملاحظات / Motif" عند إجراء التحويل وإلا لن يتم التعرف على دفعتك.
+            {/* Amount & Method Box */}
+            <div className="bg-primary/5 border border-primary/20 rounded-2xl p-4 text-center space-y-1">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest block">
+                المبلغ المراد تحويله لحساب المنصة
+              </span>
+              <p className="text-2xl font-black text-primary font-mono" dir="ltr">
+                {parseFloat(amount || '0').toLocaleString()} DA
               </p>
+              <Badge variant="outline" className="text-xs font-bold uppercase mt-1">
+                {selectedMethod === 'baridimob' ? 'BaridiMob / بريدي موب' : selectedMethod === 'ccp' ? 'Algérie Poste (CCP)' : 'Bank Transfer'}
+              </Badge>
             </div>
 
-            {/* Account details */}
-            <div className="bg-muted/20 border border-border rounded-xl p-4 space-y-2 text-xs">
-              <p className="font-bold text-sm flex items-center gap-1.5 mb-3">
-                {selectedMethod === 'ccp'
-                  ? <FileText className="h-4 w-4 text-orange-500" />
-                  : <Landmark className="h-4 w-4 text-blue-500" />
-                }
-                {selectedMethod === 'ccp' ? 'بيانات حساب CCP' : 'بيانات الحساب البنكي'}
+            {/* Official Platform Account Card */}
+            <div className="p-4 rounded-xl border border-border/80 bg-muted/20 space-y-2.5 text-xs">
+              <p className="font-bold text-foreground flex items-center gap-2">
+                <Landmark className="h-4 w-4 text-primary" />
+                <span>بيانات حساب منصة خدماتك للتحويل:</span>
               </p>
-              {selectedMethod === 'ccp' ? (
-                <>
-                  <div className="flex justify-between"><span className="text-muted-foreground">اسم الحساب</span><strong>{mockCompanyAccounts.ccp.name}</strong></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">رقم CCP</span><strong className="font-mono">{mockCompanyAccounts.ccp.accountNumber} / {mockCompanyAccounts.ccp.key}</strong></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">العنوان</span><strong className="text-right">{mockCompanyAccounts.ccp.address}</strong></div>
-                </>
-              ) : (
-                <>
-                  <div className="flex justify-between"><span className="text-muted-foreground">اسم المستفيد</span><strong>{mockCompanyAccounts.bank.name}</strong></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">البنك</span><strong>{mockCompanyAccounts.bank.bankName}</strong></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">RIB</span><strong className="font-mono text-[10px]">{mockCompanyAccounts.bank.rib}</strong></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">SWIFT</span><strong className="font-mono">{mockCompanyAccounts.bank.swift}</strong></div>
-                </>
-              )}
-              <div className="flex justify-between pt-2 border-t border-border mt-2">
-                <span className="text-muted-foreground">المبلغ المطلوب</span>
-                <strong className="text-accent text-sm">{parseFloat(amount).toLocaleString()} DA</strong>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Step 4: Confirm Completion ── */}
-        {step === 'confirmCompletion' && (
-          <div className="space-y-4 text-center">
-            {/* Success animation icon */}
-            <div className="flex justify-center">
-              <div className="relative">
-                <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center border-2 border-green-500/30 animate-pulse">
-                  <BadgeCheck className="h-8 w-8 text-green-500" />
+              
+              <div className="space-y-2 bg-background p-3 rounded-lg border border-border/60">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">صاحب الحساب:</span>
+                  <strong className="text-foreground">KHIDMATIK / منصة خدماتك الجزائر</strong>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">رقم الحساب الجاري (CCP):</span>
+                  <div className="flex items-center gap-2">
+                    <strong className="font-mono text-foreground" dir="ltr">0022334455 88</strong>
+                    <button type="button" onClick={() => handleCopy('0022334455 88')} className="text-primary hover:underline text-[10px]">نسخ</button>
+                  </div>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">رقم الهوية البريدية (RIP):</span>
+                  <div className="flex items-center gap-2">
+                    <strong className="font-mono text-foreground text-[11px]" dir="ltr">00799999002233445588</strong>
+                    <button type="button" onClick={() => handleCopy('00799999002233445588')} className="text-primary hover:underline text-[10px]">نسخ</button>
+                  </div>
+                </div>
+                <div className="flex justify-between items-center pt-2 border-t border-border">
+                  <span className="text-muted-foreground">المبلغ الصافي:</span>
+                  <strong className="font-black text-sm text-primary font-mono" dir="ltr">
+                    {parseFloat(amount || '0').toLocaleString()} DA
+                  </strong>
                 </div>
               </div>
             </div>
 
-            <div>
-              <p className="font-bold text-sm text-foreground leading-relaxed">
-                هل قمت بإتمام تحويل{' '}
-                <span className="text-accent font-black">{parseFloat(amount).toLocaleString()} DA</span>{' '}
-                عبر{' '}
-                <span className="uppercase font-black text-primary">{selectedMethod}</span>؟
+            {/* Transfer Instructions Alert */}
+            <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs flex items-start gap-2.5 text-amber-800 dark:text-amber-300">
+              <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600" />
+              <p className="leading-relaxed">
+                <strong>خطوات التحويل:</strong> قم بالتحويل من تطبيق BaridiMob أو أقرب مكتب بريد، ثم احتفظ برقم العملية (N° de transaction) للضغط على التالي وإدخاله.
               </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                مع الكود المرجعي:{' '}
-                <strong className="text-primary font-mono">{generatedTransactionCode}</strong>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 4: Confirm Completion & Input Postal Code ── */}
+        {step === 'confirmCompletion' && (
+          <div className="space-y-4">
+            <div className="p-3 rounded-xl bg-muted/20 border border-border/80 text-xs flex justify-between items-center">
+              <div>
+                <span className="text-muted-foreground block text-[10px]">طريقة التحويل:</span>
+                <strong className="text-foreground font-bold uppercase">
+                  {selectedMethod === 'baridimob' ? 'BaridiMob' : selectedMethod === 'ccp' ? 'Algérie Poste (CCP)' : 'Bank Transfer'}
+                </strong>
+              </div>
+              <div className="text-left">
+                <span className="text-muted-foreground block text-[10px]">المبلغ:</span>
+                <strong className="font-mono text-primary font-black text-sm" dir="ltr">
+                  {parseFloat(amount || '0').toLocaleString()} DA
+                </strong>
+              </div>
+            </div>
+
+            {/* Postal Transaction Code Input */}
+            <div className="space-y-1.5">
+              <Label htmlFor="postal-code" className="text-xs font-bold block text-foreground">
+                رمز العملية البريدية / رقم الوصل (Transaction Reference) *
+              </Label>
+              <Input
+                id="postal-code"
+                type="text"
+                value={postalTransactionCode}
+                onChange={(e) => setPostalTransactionCode(e.target.value)}
+                placeholder="أدخل رمز العملية (مثال: BM-20260827-1122 أو رقم الوصل)..."
+                className="h-10 text-xs font-mono rounded-xl bg-background"
+                dir="ltr"
+                required
+              />
+              <p className="text-[10px] text-muted-foreground">
+                يقوم فريق مالية المنصة بمطابقة هذا الرمز فوراً مع كشف الحساب البنكي/البريدي لاعتماد الإيداع.
               </p>
             </div>
 
-            {/* Info cards */}
-            <div className="grid grid-cols-2 gap-2 text-[10px]">
-              <div className="bg-muted/30 border border-border rounded-xl p-3 flex flex-col items-center gap-1.5">
-                <Clock className="h-4 w-4 text-primary" />
-                <span className="font-semibold">وقت المراجعة</span>
-                <span className="text-muted-foreground">2–24 ساعة عمل</span>
+            {/* Sender Details */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="sender-name" className="text-[11px] font-semibold text-foreground">اسم المرسل</Label>
+                <Input
+                  id="sender-name"
+                  type="text"
+                  value={senderName}
+                  onChange={(e) => setSenderName(e.target.value)}
+                  placeholder="اسم صاحب الحساب المحوّل منه..."
+                  className="h-9 text-xs rounded-xl bg-background"
+                />
               </div>
-              <div className="bg-muted/30 border border-border rounded-xl p-3 flex flex-col items-center gap-1.5">
-                <ShieldCheck className="h-4 w-4 text-green-500" />
-                <span className="font-semibold">حماية مضمونة</span>
-                <span className="text-muted-foreground">Escrow محمي</span>
+              <div className="space-y-1">
+                <Label htmlFor="transfer-date" className="text-[11px] font-semibold text-foreground">تاريخ التحويل</Label>
+                <Input
+                  id="transfer-date"
+                  type="date"
+                  value={transferDate}
+                  onChange={(e) => setTransferDate(e.target.value)}
+                  className="h-9 text-xs font-mono rounded-xl bg-background"
+                  dir="ltr"
+                />
               </div>
             </div>
 
-            <p className="text-[9px] text-muted-foreground bg-muted/20 border border-border rounded-lg p-2">
-              💡 يمكنك رفع صورة وصل الدفع في الإصدار القادم لتسريع المراجعة.
-            </p>
+            {/* Sender Account */}
+            <div className="space-y-1">
+              <Label htmlFor="sender-account" className="text-[11px] font-semibold text-foreground">رقم حساب المرسل (اختياري)</Label>
+              <Input
+                id="sender-account"
+                type="text"
+                value={senderAccount}
+                onChange={(e) => setSenderAccount(e.target.value)}
+                placeholder="رقم CCP أو RIP الذي تم التحويل منه..."
+                className="h-9 text-xs font-mono rounded-xl bg-background"
+                dir="ltr"
+              />
+            </div>
+
+            {/* Under Review Notice */}
+            <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 text-xs flex items-start gap-2.5 text-blue-800 dark:text-blue-300">
+              <Clock className="h-4 w-4 shrink-0 mt-0.5 text-blue-600 animate-pulse" />
+              <p className="leading-relaxed text-[11px]">
+                <strong>تأكيد الأمان المالي:</strong> بعد الضغط على الإرسال، يُحال طلبك مباشرة إلى لوحة مراجعة الإدارة للتحقق من وصول المبلغ ومطابقته ثم إضافة الرصيد إلى محفظتك.
+              </p>
+            </div>
           </div>
         )}
       </div>
 
       {/* Footer */}
       <div className="px-6 pb-5 flex items-center justify-between gap-2 bg-background border-t border-border pt-4">
-        {/* Left: Cancel / Back */}
-        <div className="flex items-center gap-2">
+        {/* Left: Back / Cancel */}
+        <div>
           {step === 'enterAmount' ? (
             <DialogClose asChild>
-              <Button variant="ghost" size="sm" onClick={onClose} className="text-xs h-8">
+              <Button variant="ghost" size="sm" onClick={onClose} className="text-xs h-9 rounded-xl">
                 إلغاء
               </Button>
             </DialogClose>
@@ -340,7 +437,7 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
             <Button
               variant="ghost"
               size="sm"
-              className="text-xs h-8 flex items-center gap-1"
+              className="text-xs h-9 rounded-xl flex items-center gap-1"
               onClick={() => {
                 if (step === 'selectMethod') setStep('enterAmount');
                 else if (step === 'paymentInstructions') setStep('selectMethod');
@@ -352,14 +449,14 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
           )}
         </div>
 
-        {/* Right: Primary action */}
+        {/* Right: Next actions */}
         <div>
           {step === 'enterAmount' && (
             <Button
               size="sm"
               onClick={handleAmountSubmit}
-              disabled={!amount || parseFloat(amount) <= 0}
-              className="h-9 px-5 text-xs font-bold flex items-center gap-1.5"
+              disabled={!amount || parseFloat(amount) < 500}
+              className="h-9 px-5 text-xs font-bold flex items-center gap-1.5 rounded-xl"
             >
               التالي <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -368,7 +465,7 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
             <Button
               size="sm"
               onClick={() => setStep('confirmCompletion')}
-              className="h-9 px-5 text-xs font-bold flex items-center gap-1.5"
+              className="h-9 px-5 text-xs font-bold flex items-center gap-1.5 rounded-xl bg-primary text-primary-foreground"
             >
               أكملت التحويل <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -377,9 +474,17 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
             <Button
               size="sm"
               onClick={handleConfirmTransfer}
-              className="h-9 px-5 text-xs font-bold bg-green-600 hover:bg-green-700 text-white flex items-center gap-1.5"
+              disabled={!postalTransactionCode.trim() || isSubmitting}
+              className="h-9 px-5 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 shadow-sm rounded-xl"
             >
-              <BadgeCheck className="h-4 w-4" /> تأكيد الإتمام
+              {isSubmitting ? (
+                <ThinkingOrbs state="solving" size="sm" inline label="جارٍ إرسال الإثبات وتأمين المعاملة..." />
+              ) : (
+                <>
+                  <BadgeCheck className="h-4 w-4" />
+                  <span>إرسال إثبات التحويل للإدارة</span>
+                </>
+              )}
             </Button>
           )}
         </div>

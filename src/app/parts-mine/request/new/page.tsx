@@ -2,6 +2,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,10 +11,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { partCategories } from '@/data/mock'; 
-import { ArrowLeft, UploadCloud, PackagePlus, Sparkles, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, UploadCloud, PackagePlus, Sparkles, AlertTriangle, Loader2 } from 'lucide-react';
 import Link from 'next/link';
+import { useAuth } from '@/context/AuthContext';
+import { partsService } from '@/services/partsService';
 
 export default function NewPartRequestPage() {
+  const router = useRouter();
+  const { user } = useAuth();
   const { toast } = useToast();
   const [partName, setPartName] = useState('');
   const [partDescription, setPartDescription] = useState('');
@@ -38,31 +43,46 @@ export default function NewPartRequestPage() {
       return;
     }
 
+    if (!user) {
+      toast({
+        title: "تسجيل الدخول مطلوب / Login Required",
+        description: "يرجى تسجيل الدخول أولاً لنشر طلب قطعة غيار.",
+        variant: "destructive"
+      });
+      router.push('/login?redirect=/parts-mine/request/new');
+      return;
+    }
+
     setIsSubmitting(true);
-    // Simulate API call / saving data
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    try {
+      await partsService.requestPart({
+        userId: user.id,
+        partName: partName.trim(),
+        partDescription: partDescription.trim(),
+        categorySlug,
+        deviceModel: deviceModel.trim(),
+        urgency: urgency ? urgency : 'medium',
+        imageUrls: [],
+      });
 
-    console.log("Part Request Submitted:", {
-      partName,
-      partDescription,
-      categorySlug,
-      deviceModel,
-      urgency,
-    });
+      toast({
+        title: "تم نشر طلب القطعة بنجاح! / Request Submitted!",
+        description: "تم نشر طلبك بنجاح. سيقوم النظام بمطابقته وإشعار البائعين المعنيين.",
+        variant: "default",
+        duration: 5000,
+      });
 
-    toast({
-      title: "Part Request Submitted!",
-      description: "Your request has been posted. Our AI will start searching for matches and notify relevant sellers.",
-      variant: "default",
-      duration: 6000,
-    });
-
-    setPartName('');
-    setPartDescription('');
-    setCategorySlug('');
-    setDeviceModel('');
-    setUrgency('');
-    setIsSubmitting(false);
+      router.push('/parts-mine');
+    } catch (err: any) {
+      console.error("Error submitting part request:", err);
+      toast({
+        title: "خطأ في إرسال الطلب / Submission Error",
+        description: err.message || "تعذر حفظ طلب القطعة في قاعدة البيانات.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -180,8 +200,15 @@ export default function NewPartRequestPage() {
                 </div>
             </div>
 
-            <Button type="submit" className="w-full bg-accent hover:bg-accent/90 text-accent-foreground py-3 text-md" disabled={isSubmitting}>
-              {isSubmitting ? 'Submitting Request...' : 'Submit Part Request'}
+            <Button type="submit" className="w-full bg-accent hover:bg-accent/90 text-accent-foreground py-3 text-md flex items-center justify-center gap-2" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <span>جاري إرسال الطلب... / Submitting Request...</span>
+                </>
+              ) : (
+                'إرسال طلب القطعة / Submit Part Request'
+              )}
             </Button>
           </form>
         </CardContent>

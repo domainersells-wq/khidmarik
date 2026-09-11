@@ -1,577 +1,381 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import React, { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from '@/components/ui/dialog';
-import { useToast } from '@/hooks/use-toast';
-import { supabase } from '@/lib/supabase';
-import { parseServiceNotes, serializeServiceNotes, createAuditLog, generateOTP, hashOTP } from '@/lib/proofOfService';
 import { 
-  Calendar, User, Clock, ShieldAlert, List, RotateCw, Search, CheckCircle, 
-  XCircle, UserMinus, UserCheck, MapPin, Activity, ShieldCheck, HelpCircle, FileText, Camera
+  Building, Calendar, Clock, DollarSign, Users, CheckCircle2, 
+  XCircle, Eye, Phone, Mail, MapPin, KeyRound, ShieldAlert, Ban
 } from 'lucide-react';
-import { format } from 'date-fns';
+import { useToast } from '@/hooks/use-toast';
+import { adminDataService, AdminBooking } from '@/services/adminDataService';
+import { AdminDataTable, ColumnDef, FilterOption, BulkAction } from '@/components/admin/shared/AdminDataTable';
+import { AdminDetailDrawer } from '@/components/admin/shared/AdminDetailDrawer';
+import { AdminConfirmModal } from '@/components/admin/shared/AdminConfirmModal';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export function ReservationManagementSection() {
   const { toast } = useToast();
-  const [appointments, setAppointments] = useState<any[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [viewingAppt, setViewingAppt] = useState<any | null>(null);
+  const [bookings, setBookings] = useState<AdminBooking[]>([]);
+  const [selectedBooking, setSelectedBooking] = useState<AdminBooking | null>(null);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
 
-  // Administrative operation states
-  const [isResolvingDispute, setIsResolvingDispute] = useState(false);
-  const [isRegeneratingOtp, setIsRegeneratingOtp] = useState(false);
-  const [newGeneratedOtp, setNewGeneratedOtp] = useState('');
+  const [confirmState, setConfirmState] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    action: () => void;
+    variant: 'danger' | 'warning' | 'info' | 'success';
+  }>({
+    isOpen: false,
+    title: '',
+    description: '',
+    action: () => {},
+    variant: 'warning',
+  });
 
-  const loadAppointments = async () => {
-    setIsLoading(true);
-    let dbAppts: any[] = [];
-    
-    // 1. Fetch from Supabase if connected
-    try {
-      const { data, error } = await supabase
-        .from('appointments')
-        .select('*')
-        .order('date', { ascending: false });
-
-      if (!error && data) {
-        dbAppts = data.map((appt: any) => ({
-          id: appt.id,
-          reservationId: appt.id,
-          patientName: appt.patient_name || 'Client',
-          reasonForVisit: appt.reason_for_visit || 'Service',
-          date: appt.date,
-          timeSlot: appt.time_slot,
-          status: appt.status,
-          notes: appt.notes || '',
-          location: appt.location || '',
-          providerId: appt.provider_id
-        }));
-      }
-    } catch (e) {
-      console.warn("Could not load from Supabase database:", e);
-    }
-
-    // 2. Load from LocalStorage fallback
-    const saved = localStorage.getItem('khidmatik_appointments');
-    let localAppts: any[] = [];
-    if (saved) {
-      try {
-        const list = JSON.parse(saved);
-        localAppts = list.map((appt: any) => ({
-          id: appt.id || appt.reservationId,
-          reservationId: appt.id || appt.reservationId,
-          patientName: appt.patient_name || appt.clientName || 'Client',
-          reasonForVisit: appt.reason_for_visit || appt.service || 'Service',
-          date: appt.date,
-          timeSlot: appt.time_slot,
-          status: appt.status,
-          notes: appt.notes || '',
-          location: appt.location || '',
-          providerId: appt.provider_id
-        }));
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    // Merge
-    const merged = [...dbAppts];
-    localAppts.forEach(la => {
-      if (!merged.some(m => m.id === la.id)) {
-        merged.push(la);
-      }
-    });
-
-    setAppointments(merged);
-    setIsLoading(false);
+  const loadData = () => {
+    setBookings(adminDataService.getBookings());
   };
 
   useEffect(() => {
-    loadAppointments();
+    loadData();
   }, []);
 
-  const getStatusBadge = (status: string) => {
-    const s = status?.toLowerCase();
-    if (s === 'confirmed') return <Badge className="bg-green-600 text-white">Confirmed</Badge>;
-    if (s === 'en_route') return <Badge className="bg-blue-500 text-white">En Route</Badge>;
-    if (s === 'in_progress') return <Badge className="bg-purple-600 text-white">In Progress</Badge>;
-    if (s === 'waiting_verification') return <Badge className="bg-cyan-600 text-white animate-pulse">Verification Needed</Badge>;
-    if (s === 'disputed') return <Badge variant="destructive" className="animate-pulse">Disputed</Badge>;
-    if (s === 'completed') return <Badge variant="outline" className="border-green-600 text-green-600">Completed</Badge>;
-    if (s === 'cancelled') return <Badge variant="destructive">Cancelled</Badge>;
-    return <Badge className="bg-amber-500 text-white">Pending</Badge>;
+  const handleStatusChange = (bookingId: string, newStatus: AdminBooking['status']) => {
+    adminDataService.updateBookingStatus(bookingId, newStatus);
+    loadData();
+    if (selectedBooking && selectedBooking.id === bookingId) {
+      setSelectedBooking({ ...selectedBooking, status: newStatus });
+    }
+    toast({
+      title: 'Booking Status Updated',
+      description: `Reservation status changed to ${newStatus}.`,
+    });
   };
 
-  // 1. Resolve Dispute Actions
-  const handleResolveDispute = async (apptId: string, resolution: 'completed' | 'cancelled') => {
-    setIsResolvingDispute(true);
-    const appt = appointments.find(a => a.id === apptId);
-    if (!appt) return;
+  const handleRegenerateOtp = (bookingId: string) => {
+    const list = adminDataService.getBookings();
+    const target = list.find((b) => b.id === bookingId);
+    if (!target) return;
+    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    target.otpCode = newOtp;
+    adminDataService.saveBookings(list);
+    adminDataService.recordAudit('Super Admin', 'UPDATE', 'Booking', bookingId, `Regenerated OTP security code to ${newOtp}`);
+    loadData();
+    if (selectedBooking && selectedBooking.id === bookingId) {
+      setSelectedBooking({ ...target });
+    }
+    toast({
+      title: 'OTP Code Regenerated',
+      description: `New Proof-of-Service verification OTP: ${newOtp}`,
+    });
+  };
 
-    const payload = parseServiceNotes(appt.notes);
-    const resolveLog = createAuditLog('ADMIN_RESOLVE_DISPUTE', `Admin intervened and resolved dispute. Outcome: Marked booking as ${resolution.toUpperCase()}`);
-    payload.auditLogs.push(resolveLog);
+  const filterOptions: FilterOption[] = [
+    {
+      key: 'type',
+      label: 'Type',
+      options: [
+        { label: 'Banquet Hall', value: 'banquet_hall' },
+        { label: 'Craftsman', value: 'craftsman' },
+        { label: 'Service Point', value: 'service' },
+      ],
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      options: [
+        { label: 'Pending', value: 'pending' },
+        { label: 'Confirmed', value: 'confirmed' },
+        { label: 'In Progress', value: 'in_progress' },
+        { label: 'Completed', value: 'completed' },
+        { label: 'Cancelled', value: 'cancelled' },
+        { label: 'Disputed', value: 'disputed' },
+      ],
+    },
+  ];
 
-    const updatedNotes = serializeServiceNotes(payload);
+  const bulkActions: BulkAction<AdminBooking>[] = [
+    {
+      label: 'Confirm Selected',
+      icon: CheckCircle2,
+      variant: 'default',
+      action: (selected) => {
+        selected.forEach((b) => adminDataService.updateBookingStatus(b.id, 'confirmed'));
+        loadData();
+        toast({ title: 'Batch Confirmation', description: `${selected.length} bookings confirmed.` });
+      },
+    },
+    {
+      label: 'Cancel Selected',
+      icon: Ban,
+      variant: 'destructive',
+      action: (selected) => {
+        setConfirmState({
+          isOpen: true,
+          title: `Cancel ${selected.length} Bookings`,
+          description: `Are you sure you want to cancel ${selected.length} reservations?`,
+          variant: 'danger',
+          action: () => {
+            selected.forEach((b) => adminDataService.updateBookingStatus(b.id, 'cancelled'));
+            loadData();
+            setConfirmState((prev) => ({ ...prev, isOpen: false }));
+            toast({ title: 'Batch Cancellation', description: `${selected.length} bookings cancelled.` });
+          },
+        });
+      },
+    },
+  ];
 
-    // Save locally
-    const saved = localStorage.getItem('khidmatik_appointments');
-    if (saved) {
-      try {
-        const list = JSON.parse(saved);
-        const updatedList = list.map((a: any) =>
-          (a.id === apptId || a.reservationId === apptId) ? { ...a, status: resolution, notes: updatedNotes } : a
+  const columns: ColumnDef<AdminBooking>[] = [
+    {
+      header: 'Booking Code & Type',
+      accessorKey: 'bookingCode',
+      cell: (b) => (
+        <div className="space-y-0.5">
+          <div className="font-semibold text-foreground font-mono">{b.bookingCode}</div>
+          <Badge variant="outline" className="text-[10px] uppercase font-semibold">
+            {b.type.replace('_', ' ')}
+          </Badge>
+        </div>
+      ),
+    },
+    {
+      header: 'Customer',
+      accessorKey: 'customerName',
+      cell: (b) => (
+        <div className="space-y-0.5 text-xs">
+          <div className="font-medium text-foreground">{b.customerName}</div>
+          <div className="text-muted-foreground font-mono">{b.customerPhone}</div>
+        </div>
+      ),
+    },
+    {
+      header: 'Provider / Venue',
+      accessorKey: 'providerOrVenueName',
+      cell: (b) => (
+        <div className="space-y-0.5 text-xs">
+          <div className="font-medium text-foreground">{b.providerOrVenueName}</div>
+          <div className="text-muted-foreground">{b.wilaya}</div>
+        </div>
+      ),
+    },
+    {
+      header: 'Date & Time Slot',
+      accessorKey: 'scheduledDate',
+      cell: (b) => (
+        <div className="space-y-0.5 text-xs">
+          <div className="font-medium text-foreground flex items-center gap-1">
+            <Calendar className="h-3 w-3 text-muted-foreground" />
+            {b.scheduledDate}
+          </div>
+          <div className="text-muted-foreground flex items-center gap-1">
+            <Clock className="h-3 w-3" />
+            {b.timeSlot}
+          </div>
+        </div>
+      ),
+    },
+    {
+      header: 'Total / Deposit',
+      accessorKey: 'totalPrice',
+      cell: (b) => (
+        <div className="text-xs">
+          <span className="font-bold text-foreground">{b.totalPrice.toLocaleString()} DA</span>
+          <span className="text-muted-foreground block">
+            Deposit: {b.depositPaid.toLocaleString()} DA
+          </span>
+        </div>
+      ),
+    },
+    {
+      header: 'Status',
+      accessorKey: 'status',
+      cell: (b) => {
+        const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+          confirmed: 'default',
+          completed: 'default',
+          in_progress: 'secondary',
+          pending: 'secondary',
+          cancelled: 'destructive',
+          disputed: 'destructive',
+        };
+        return (
+          <Badge variant={variants[b.status] || 'outline'} className="capitalize text-xs">
+            {b.status.replace('_', ' ')}
+          </Badge>
         );
-        localStorage.setItem('khidmatik_appointments', JSON.stringify(updatedList));
-      } catch (e) { console.error(e); }
-    }
+      },
+    },
+    {
+      header: 'Actions',
+      cell: (b) => (
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 px-2 text-xs"
+            onClick={() => {
+              setSelectedBooking(b);
+              setIsDetailOpen(true);
+            }}
+          >
+            <Eye className="h-3.5 w-3.5 mr-1" /> View
+          </Button>
+        </div>
+      ),
+    },
+  ];
 
-    // Save to Supabase
-    try {
-      await supabase.from('appointments').update({ status: resolution, notes: updatedNotes }).eq('id', apptId);
-      await supabase.from('notifications').insert([
-        {
-          user_id: appt.providerId,
-          title: 'Dispute Resolved by Admin',
-          message: `Admin resolved dispute on reservation ${appt.reservationId}. Status: ${resolution.toUpperCase()}`,
-          type: 'appointment'
-        }
-      ]);
-    } catch (e) {
-      console.warn("Supabase update fallback", e);
-    }
-
-    toast({
-      title: "Dispute Resolved Successfully",
-      description: `Appointment status is now ${resolution.toUpperCase()}`,
-    });
-
-    setIsResolvingDispute(false);
-    setViewingAppt(null);
-    loadAppointments();
-  };
-
-  // 2. Regenerate Verification OTP code
-  const handleRegenerateOtp = async (apptId: string) => {
-    setIsRegeneratingOtp(true);
-    const appt = appointments.find(a => a.id === apptId);
-    if (!appt) return;
-
-    const otp = generateOTP();
-    const otpHash = await hashOTP(otp);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 minutes expiry
-
-    const payload = parseServiceNotes(appt.notes);
-    const regenLog = createAuditLog('ADMIN_REGENERATE_OTP', `Admin regenerated verification code. New code active for client.`);
-    
-    payload.otpCode = otp;
-    payload.otpCodeHash = otpHash;
-    payload.otpExpiresAt = expiresAt;
-    payload.failedOtpAttempts = 0;
-    payload.otpLocked = false;
-    payload.auditLogs.push(regenLog);
-
-    const updatedNotes = serializeServiceNotes(payload);
-
-    // Save locally
-    const saved = localStorage.getItem('khidmatik_appointments');
-    if (saved) {
-      try {
-        const list = JSON.parse(saved);
-        const updatedList = list.map((a: any) =>
-          (a.id === apptId || a.reservationId === apptId) ? { ...a, notes: updatedNotes } : a
-        );
-        localStorage.setItem('khidmatik_appointments', JSON.stringify(updatedList));
-      } catch (e) { console.error(e); }
-    }
-
-    // Save to Supabase
-    try {
-      await supabase.from('appointments').update({ notes: updatedNotes }).eq('id', apptId);
-    } catch (e) {
-      console.warn("Supabase update fallback", e);
-    }
-
-    setNewGeneratedOtp(otp);
-    toast({
-      title: "OTP Regenerated Successfully",
-      description: `New OTP: ${otp} (active for 10 minutes)`,
-    });
-    setIsRegeneratingOtp(false);
-    
-    // Refresh viewing appointment state
-    const updatedAppt = { ...appt, notes: updatedNotes };
-    setViewingAppt(updatedAppt);
-    loadAppointments();
-  };
-
-  // 3. Suspend Service Provider (Conceptual)
-  const handleSuspendProvider = (providerId: string, currentStatus: string) => {
-    toast({
-      title: "Provider Account Action Triggered",
-      description: `Provider ID ${providerId} account suspended. Management has locked service access.`,
-      variant: "destructive"
-    });
-  };
-
-  const filtered = appointments.filter(a => 
-    a.reservationId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    a.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    a.reasonForVisit.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const total = bookings.length;
+  const confirmed = bookings.filter((b) => b.status === 'confirmed').length;
+  const totalVolume = bookings.reduce((acc, b) => acc + b.totalPrice, 0);
+  const pending = bookings.filter((b) => b.status === 'pending').length;
 
   return (
     <div className="space-y-6">
-      <header className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold font-headline flex items-center">
-            <ShieldAlert className="mr-3 h-8 w-8 text-primary" /> Service Supervisor & Bookings Console
-          </h1>
-          <p className="text-muted-foreground">Manage service delivery life cycles, investigate disputes, and verify logs.</p>
-        </div>
-        <Button onClick={loadAppointments} size="sm" variant="outline" className="flex gap-1.5 items-center">
-          <RotateCw className="h-4 w-4" /> Refresh Lists
-        </Button>
-      </header>
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold font-headline flex items-center tracking-tight">
+          <Building className="mr-3 h-8 w-8 text-primary" /> Bookings & Reservations
+        </h1>
+        <p className="text-muted-foreground text-sm">
+          Oversee banquet hall venues, service appointments, craftsmen dispatch schedules, and proof-of-service OTP verification.
+        </p>
+      </div>
 
-      <Card>
-        <CardHeader className="pb-3 border-b">
-          <CardTitle>System Bookings Tracker</CardTitle>
-          <CardDescription>Real-time overview of field services and OTP verification events.</CardDescription>
-          <div className="flex items-center gap-3 mt-4">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search Reservation ID, Customer Name..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="pl-9"
-              />
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card className="bg-card shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Total Bookings</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-foreground">{total}</div>
+            <p className="text-xs text-muted-foreground mt-1">Halls & Service appointments</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Confirmed</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-600">{confirmed}</div>
+            <p className="text-xs text-muted-foreground mt-1">Ready on calendar</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Pending Action</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-amber-600">{pending}</div>
+            <p className="text-xs text-muted-foreground mt-1">Awaiting provider acceptance</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-card shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Total Value</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-primary">{totalVolume.toLocaleString()} DA</div>
+            <p className="text-xs text-muted-foreground mt-1">Gross booking volume</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Table */}
+      <AdminDataTable
+        data={bookings}
+        columns={columns}
+        searchPlaceholder="Search booking by code, customer, provider/hall, wilaya..."
+        searchKeys={['bookingCode', 'customerName', 'customerPhone', 'providerOrVenueName', 'wilaya', 'category']}
+        filterOptions={filterOptions}
+        bulkActions={bulkActions}
+        exportFileName="khidmatik_bookings"
+        onRowClick={(b) => {
+          setSelectedBooking(b);
+          setIsDetailOpen(true);
+        }}
+        onRefresh={loadData}
+      />
+
+      {/* Detail Drawer */}
+      {selectedBooking && (
+        <AdminDetailDrawer
+          isOpen={isDetailOpen}
+          onClose={() => setIsDetailOpen(false)}
+          title={`Booking ${selectedBooking.bookingCode}`}
+          subtitle={`Date: ${selectedBooking.scheduledDate} (${selectedBooking.timeSlot})`}
+          statusBadge={{
+            label: selectedBooking.status.replace('_', ' '),
+            variant: selectedBooking.status === 'confirmed' || selectedBooking.status === 'completed' ? 'default' : 'secondary',
+          }}
+          metrics={[
+            { label: 'Total Price', value: `${selectedBooking.totalPrice.toLocaleString()} DA`, icon: DollarSign },
+            { label: 'Deposit Paid', value: `${selectedBooking.depositPaid.toLocaleString()} DA`, icon: DollarSign },
+            { label: 'Type', value: selectedBooking.type.toUpperCase(), icon: Building },
+            { label: 'Service OTP', value: selectedBooking.otpCode || 'N/A', icon: KeyRound },
+          ]}
+          fields={[
+            { label: 'Customer Name', value: selectedBooking.customerName, icon: Users },
+            { label: 'Phone Number', value: selectedBooking.customerPhone, icon: Phone },
+            { label: 'Email Address', value: selectedBooking.customerEmail, icon: Mail },
+            { label: 'Venue / Provider', value: selectedBooking.providerOrVenueName },
+            { label: 'Category', value: selectedBooking.category },
+            { label: 'Location / Wilaya', value: `${selectedBooking.address}, ${selectedBooking.wilaya}`, fullWidth: true, icon: MapPin },
+            { label: 'Guests / Units', value: selectedBooking.guestsOrUnits ? `${selectedBooking.guestsOrUnits} guests` : 'Standard service unit' },
+            { label: 'Proof of Service OTP', value: selectedBooking.otpCode || 'None' },
+          ]}
+          activityHistory={[
+            {
+              timestamp: `${selectedBooking.createdAt} 15:30`,
+              actor: selectedBooking.customerName,
+              action: 'Booking Created',
+              details: `Initial deposit of ${selectedBooking.depositPaid} DA recorded.`,
+            },
+          ]}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleRegenerateOtp(selectedBooking.id)}
+              >
+                <KeyRound className="h-4 w-4 mr-1.5" /> Regenerate OTP
+              </Button>
+              <Select
+                value={selectedBooking.status}
+                onValueChange={(val: any) => handleStatusChange(selectedBooking.id, val)}
+              >
+                <SelectTrigger className="h-9 w-[150px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="confirmed">Confirmed</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                  <SelectItem value="disputed">Disputed</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <div className="flex justify-center items-center py-16 gap-2">
-              <RotateCw className="h-6 w-6 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">Syncing appointments list...</span>
-            </div>
-          ) : filtered.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Reservation ID</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Service Request</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.map(appt => (
-                  <TableRow key={appt.id}>
-                    <TableCell className="font-mono text-xs">{appt.reservationId}</TableCell>
-                    <TableCell className="font-medium">{appt.patientName}</TableCell>
-                    <TableCell>{appt.reasonForVisit}</TableCell>
-                    <TableCell>{appt.date}</TableCell>
-                    <TableCell>{getStatusBadge(appt.status)}</TableCell>
-                    <TableCell className="text-right">
-                      <Button size="sm" variant="ghost" onClick={() => {
-                        setViewingAppt(appt);
-                        setNewGeneratedOtp('');
-                      }}>
-                        Investigate Logs
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <div className="text-center py-16 text-muted-foreground">
-              <HelpCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p>No reservations matching your search parameters were found.</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          }
+        />
+      )}
 
-      {/* Investigation details Dialog */}
-      <Dialog open={!!viewingAppt} onOpenChange={() => setViewingAppt(null)}>
-        <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
-          <DialogHeader className="border-b pb-2">
-            <DialogTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5 text-primary" /> Investigation Report: {viewingAppt?.reservationId}
-            </DialogTitle>
-            <DialogDescription>Full audit logs, execution metrics, and supervisor controls.</DialogDescription>
-          </DialogHeader>
-
-          {viewingAppt && (
-            <div className="space-y-5 pt-3">
-              {/* Profile Details */}
-              <div className="grid grid-cols-2 gap-4 bg-muted/40 p-3 rounded-lg border text-sm">
-                <div>
-                  <span className="text-[10px] text-muted-foreground block uppercase font-bold">Client / Customer</span>
-                  <span className="font-semibold">{viewingAppt.patientName}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-muted-foreground block uppercase font-bold">Service / Job</span>
-                  <span>{viewingAppt.reasonForVisit}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-muted-foreground block uppercase font-bold">Booking Date</span>
-                  <span>{viewingAppt.date} {viewingAppt.timeSlot ? `(${viewingAppt.timeSlot})` : ''}</span>
-                </div>
-                <div>
-                  <span className="text-[10px] text-muted-foreground block uppercase font-bold">Workflow Status</span>
-                  <div className="mt-0.5">{getStatusBadge(viewingAppt.status)}</div>
-                </div>
-              </div>
-
-              {/* Service Address */}
-              <div className="text-sm flex gap-1.5 items-start bg-muted/20 p-2.5 rounded-lg border border-dashed">
-                <MapPin className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                <div>
-                  <strong className="block text-[11px] uppercase tracking-wider text-muted-foreground">Service Delivery Location</strong>
-                  <span>{viewingAppt.location || parseServiceNotes(viewingAppt.notes).location}</span>
-                </div>
-              </div>
-
-              {/* Dispute Alert Box */}
-              {viewingAppt.status === 'disputed' && (
-                <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-900 space-y-2">
-                  <div className="flex items-center gap-1.5 font-bold text-sm">
-                    <ShieldAlert className="h-5 w-5 text-red-600 animate-pulse" /> Dispute Incident Escaled by Client
-                  </div>
-                  <div className="text-xs space-y-1 pl-6">
-                    <p>Reason selected: <strong className="underline">{parseServiceNotes(viewingAppt.notes).disputeReason}</strong></p>
-                    <p className="bg-white p-2 border rounded italic">"{parseServiceNotes(viewingAppt.notes).disputeComments}"</p>
-                    <p className="text-[10px] text-muted-foreground">Escalated on: {parseServiceNotes(viewingAppt.notes).disputeTimestamp}</p>
-                  </div>
-                  
-                  {/* Supervisor Resolution Actions */}
-                  <div className="flex gap-2 pt-2 justify-end">
-                    <Button 
-                      size="sm" 
-                      onClick={() => handleResolveDispute(viewingAppt.id, 'cancelled')} 
-                      variant="outline" 
-                      className="border-red-300 text-red-700 hover:bg-red-100"
-                    >
-                      <XCircle className="h-3.5 w-3.5 mr-1" /> Force Cancel & Refund
-                    </Button>
-                    <Button 
-                      size="sm" 
-                      onClick={() => handleResolveDispute(viewingAppt.id, 'completed')} 
-                      className="bg-green-600 hover:bg-green-700 text-white"
-                    >
-                      <CheckCircle className="h-3.5 w-3.5 mr-1" /> Force Complete Order
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Execution Details (Redesigned Service Completion Report) */}
-              {(parseServiceNotes(viewingAppt.notes).startTime || parseServiceNotes(viewingAppt.notes).endTime) && (() => {
-                const report = parseServiceNotes(viewingAppt.notes);
-                return (
-                  <div className="border rounded-lg p-4 space-y-4 bg-card">
-                    <h4 className="font-semibold text-xs text-muted-foreground uppercase flex items-center gap-1.5 border-b pb-1">
-                      <FileText className="h-4 w-4" /> Service Completion Report / تقرير الإنجاز
-                    </h4>
-                    
-                    <div className="grid grid-cols-2 gap-4 text-xs">
-                      <div>
-                        <span className="text-muted-foreground block">Started At:</span>
-                        <span className="font-medium">{report.startTime ? new Date(report.startTime).toLocaleString() : 'Not recorded'}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block">Finished At:</span>
-                        <span className="font-medium">{report.endTime ? new Date(report.endTime).toLocaleString() : 'Not finished yet'}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block">Reported Duration:</span>
-                        <span className="font-medium">{report.endDuration || 'N/A'}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground block">GPS Captures:</span>
-                        <span className="font-mono text-primary font-semibold">{report.gpsCoords || 'N/A'}</span>
-                      </div>
-                    </div>
-
-                    {/* Checklist */}
-                    {report.workChecklist && (
-                      <div className="bg-muted/20 p-3 rounded border space-y-1.5">
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase block">Work Checklist</span>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="flex items-center gap-1 text-muted-foreground">
-                            <span className={report.workChecklist.workDone ? "text-green-600 font-bold" : ""}>
-                              {report.workChecklist.workDone ? "☑" : "☐"} Works Completed
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1 text-muted-foreground">
-                            <span className={report.workChecklist.cleanUp ? "text-green-600 font-bold" : ""}>
-                              {report.workChecklist.cleanUp ? "☑" : "☐"} Cleaned Workspace
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1 text-muted-foreground">
-                            <span className={report.workChecklist.tested ? "text-green-600 font-bold" : ""}>
-                              {report.workChecklist.tested ? "☑" : "☐"} Tested Service
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1 text-muted-foreground">
-                            <span className={report.workChecklist.explained ? "text-green-600 font-bold" : ""}>
-                              {report.workChecklist.explained ? "☑" : "☐"} Explained to Client
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Completion Notes */}
-                    {report.completionNotesText && (
-                      <div className="text-xs bg-muted/40 p-2.5 border rounded">
-                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Professional Work Notes / ملاحظات الحرفي:</span>
-                        <p className="mt-0.5 italic">"{report.completionNotesText}"</p>
-                      </div>
-                    )}
-
-                    {/* Materials billing */}
-                    {report.materialsUsed && report.materialsUsed.length > 0 && (
-                      <div className="space-y-1.5">
-                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Materials & Parts Used / المواد والقطع المصروفة</span>
-                        <div className="border rounded-md overflow-hidden">
-                          <Table>
-                            <TableHeader className="bg-muted/50">
-                              <TableRow className="h-7">
-                                <TableHead className="h-7 py-0.5 text-xs">Material</TableHead>
-                                <TableHead className="h-7 py-0.5 text-xs text-center">Qty</TableHead>
-                                <TableHead className="h-7 py-0.5 text-xs text-right">Price</TableHead>
-                                <TableHead className="h-7 py-0.5 text-xs text-right">Total</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {report.materialsUsed.map((mat, i) => (
-                                <TableRow key={i} className="h-7">
-                                  <TableCell className="py-0.5 text-xs">{mat.name}</TableCell>
-                                  <TableCell className="py-0.5 text-xs text-center">{mat.quantity}</TableCell>
-                                  <TableCell className="py-0.5 text-xs text-right">{mat.price.toFixed(2)} DA</TableCell>
-                                  <TableCell className="py-0.5 text-xs text-right font-semibold">{(mat.quantity * mat.price).toFixed(2)} DA</TableCell>
-                                </TableRow>
-                              ))}
-                              <TableRow className="bg-muted/20 font-bold h-7">
-                                <TableCell colSpan={3} className="py-0.5 text-xs text-right">Materials Sum Cost:</TableCell>
-                                <TableCell className="py-0.5 text-xs text-right text-primary">
-                                  {report.materialsUsed.reduce((acc, cur) => acc + (cur.quantity * cur.price), 0).toFixed(2)} DA
-                                </TableCell>
-                              </TableRow>
-                            </TableBody>
-                          </Table>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Photo galleries */}
-                    {((report.beforePhotos && report.beforePhotos.length > 0) || (report.afterPhotos && report.afterPhotos.length > 0)) && (
-                      <div className="space-y-2">
-                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Photo Evidence Files</span>
-                        <div className="grid grid-cols-2 gap-4">
-                          {/* Before */}
-                          <div className="space-y-1">
-                            <span className="text-[9px] uppercase font-bold text-amber-600 block">Before Gallery</span>
-                            <div className="grid grid-cols-2 gap-1 bg-muted/20 p-1.5 rounded border">
-                              {report.beforePhotos?.map((photo, i) => (
-                                <div key={i} className="bg-background rounded border p-1 font-mono text-[9px] truncate text-center">
-                                  {photo.split('/').pop()}
-                                </div>
-                              )) || <span className="text-[9px] text-muted-foreground italic">None</span>}
-                            </div>
-                          </div>
-
-                          {/* After */}
-                          <div className="space-y-1">
-                            <span className="text-[9px] uppercase font-bold text-green-600 block">After Gallery</span>
-                            <div className="grid grid-cols-2 gap-1 bg-muted/20 p-1.5 rounded border">
-                              {report.afterPhotos?.map((photo, i) => (
-                                <div key={i} className="bg-background rounded border p-1 font-mono text-[9px] truncate text-center">
-                                  {photo.split('/').pop()}
-                                </div>
-                              )) || <span className="text-[9px] text-muted-foreground italic">None</span>}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* Audit Logs */}
-              <div className="space-y-2 border rounded-lg p-3">
-                <h4 className="font-semibold text-xs text-muted-foreground uppercase flex items-center gap-1.5"><List className="h-4 w-4" /> Activity Log & Audit Trail (سجل العمليات)</h4>
-                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-                  {parseServiceNotes(viewingAppt.notes).auditLogs.map((log, idx) => (
-                    <div key={idx} className="p-2 border rounded bg-muted/20 hover:bg-muted/40 transition-colors text-xs space-y-1">
-                      <div className="flex justify-between items-center font-semibold">
-                        <span className="text-primary">{log.action}</span>
-                        <span className="text-[10px] text-muted-foreground font-mono">{new Date(log.timestamp).toLocaleString()}</span>
-                      </div>
-                      <p className="text-muted-foreground">{log.details}</p>
-                      <div className="flex justify-between text-[10px] text-muted-foreground/80 font-mono bg-muted/30 p-1 rounded">
-                        <span>Device: {log.device || 'Unknown'}</span>
-                        {log.gps && <span className="text-green-600 font-bold">GPS: {log.gps}</span>}
-                        <span>IP: {log.ip || 'Localhost'}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Action operations */}
-              <div className="flex flex-wrap gap-2 border-t pt-3 mt-4">
-                {viewingAppt.status === 'waiting_verification' && (
-                  <Button 
-                    size="sm" 
-                    variant="outline" 
-                    className="flex gap-1 items-center border-cyan-300 text-cyan-800"
-                    onClick={() => handleRegenerateOtp(viewingAppt.id)}
-                    disabled={isRegeneratingOtp}
-                  >
-                    <RotateCw className="h-3.5 w-3.5" /> Regenerate Verification OTP
-                  </Button>
-                )}
-
-                <Button 
-                  size="sm" 
-                  variant="outline" 
-                  className="flex gap-1 items-center text-red-600 hover:text-red-700 ml-auto border-red-200"
-                  onClick={() => handleSuspendProvider(viewingAppt.providerId, viewingAppt.status)}
-                >
-                  <UserMinus className="h-3.5 w-3.5" /> Suspend Provider (Concept)
-                </Button>
-              </div>
-
-              {newGeneratedOtp && (
-                <div className="p-3 bg-green-50 border border-green-200 text-green-900 rounded-lg text-xs mt-3 flex justify-between items-center font-mono">
-                  <span>New OTP code generated for client: <strong>{newGeneratedOtp}</strong></span>
-                  <span className="text-[10px] text-muted-foreground">Expires in 10 minutes</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          <DialogFooter className="border-t pt-2 mt-4">
-            <DialogClose asChild><Button variant="outline">Close Report</Button></DialogClose>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Confirm Modal */}
+      <AdminConfirmModal
+        isOpen={confirmState.isOpen}
+        onClose={() => setConfirmState((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmState.action}
+        title={confirmState.title}
+        description={confirmState.description}
+        variant={confirmState.variant}
+      />
     </div>
   );
 }

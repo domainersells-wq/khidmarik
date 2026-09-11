@@ -112,6 +112,22 @@ export interface GroupOrderItem {
 }
 
 
+export interface BusinessLocationData {
+  latitude: number;
+  longitude: number;
+  address: string;
+  city: string;
+  wilaya: string;
+  wilayaCode?: string;
+  country: string;
+  accuracy?: number;
+  isLocationPublic: boolean;
+  isMobileService: boolean;
+  serviceAreaRadius?: number;
+  serviceWilayas?: string[];
+  updated_at?: string;
+}
+
 export interface BaseListing {
   id: string;
   name: string;
@@ -130,6 +146,12 @@ export interface BaseListing {
     fullAddress?: string;
     zipCode?: string;
     wilayaCode?: string; // Added wilaya code for filtering
+    latitude?: number;
+    longitude?: number;
+    isLocationPublic?: boolean;
+    isMobileService?: boolean;
+    serviceAreaRadius?: number;
+    serviceWilayas?: string[];
   };
   reviews: Review[];
   averageRating: number;
@@ -376,12 +398,18 @@ export interface TopUpTransaction {
   id: string;
   userId: string;
   amount: number;
-  method: 'ccp' | 'bank'; // Could be expanded
-  status: 'pending-review' | 'approved' | 'rejected';
+  method: 'ccp' | 'bank' | 'baridimob' | string;
+  status: 'pending-review' | 'approved' | 'rejected' | 'info_required';
   transactionCode: string; // User-provided or system-generated reference
   receiptImageUrl?: string; // Optional URL for uploaded receipt
   createdAt: string; // ISO timestamp
   processedAt?: string; // ISO timestamp
+  requestedInfoNote?: string;
+  requestedInfoAt?: string;
+  userClarificationText?: string;
+  userClarificationAttachmentUrl?: string;
+  userClarificationFileName?: string;
+  userClarificationSubmittedAt?: string;
 }
 
 export interface AssistantSuggestion {

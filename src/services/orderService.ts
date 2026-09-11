@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import type { OrderItem } from '@/types';
+import { unifiedOrderService } from '@/services/unifiedOrderService';
+import { notificationService } from '@/services/notificationService';
 
 export interface OrderInput {
   customerId: string;
@@ -115,11 +117,18 @@ export const orderService = {
       .single();
 
     if (store) {
-      await supabase.from('notifications').insert({
-        user_id: store.owner_id,
+      await notificationService.sendNotification({
+        userId: store.owner_id,
+        type: 'new_order',
         title: 'New Order Received!',
         message: `You received a new order of ${order.total} DA at your store "${store.name}".`,
-        type: 'order_status'
+        data: {
+          referenceId: orderData.id,
+          orderId: orderData.id,
+          amount: order.total,
+          customerName: order.customerName,
+          actionUrl: '/profile?tab=orders'
+        }
       });
     }
 
@@ -195,13 +204,33 @@ export const orderService = {
 
     if (error) throw new Error(error.message);
 
-    // Notify customer about status change
+    // Notify customer about status change using appropriate event type
     if (currentOrder?.customer_id) {
-      await supabase.from('notifications').insert({
-        user_id: currentOrder.customer_id,
-        title: `Order Status Updated: ${status}`,
-        message: `Your order is now: ${status}.`,
-        type: 'order_status'
+      let notifType: 'order_accepted' | 'order_rejected' | 'order_cancelled' | 'new_order' = 'order_accepted';
+      let title = `Order Status: ${status}`;
+      
+      if (status === 'accepted' || status === 'processing' || status === 'shipped') {
+        notifType = 'order_accepted';
+        title = `Order Accepted & In Progress`;
+      } else if (status === 'rejected') {
+        notifType = 'order_rejected';
+        title = `Order Declined by Vendor`;
+      } else if (status === 'cancelled') {
+        notifType = 'order_cancelled';
+        title = `Order Cancelled`;
+      }
+
+      await notificationService.sendNotification({
+        userId: currentOrder.customer_id,
+        type: notifType,
+        title,
+        message: `Your order #${orderId.slice(0, 8)} is now: ${status}.`,
+        data: {
+          referenceId: orderId,
+          orderId,
+          status,
+          actionUrl: '/profile?tab=orders'
+        }
       });
     }
   },

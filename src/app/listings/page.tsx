@@ -1,8 +1,13 @@
 import { Suspense } from 'react';
 import { storeService } from '@/services/storeService';
+import { seoService } from '@/services/seoService';
 import type { Listing, Professional } from '@/types';
 import type { Metadata } from 'next';
 import { ListingsClientContainer } from '@/components/yelp/ListingsClientContainer';
+import { constructMetadata } from '@/lib/seo/metadata';
+import { JsonLd, generateBreadcrumbSchema } from '@/lib/seo/jsonLd';
+import { siteConfig } from '@/config/site';
+import { ThinkingOrbs } from '@/components/ui/thinking-orbs';
 
 interface ListingsPageProps {
   searchParams: Promise<{
@@ -20,21 +25,7 @@ interface ListingsPageProps {
 export async function generateMetadata({ searchParams: searchParamsPromise }: ListingsPageProps): Promise<Metadata> {
   const searchParams = await searchParamsPromise;
   const { q, category, location, type } = searchParams;
-  let title = 'Browse Listings';
-  if (type === 'store') title = 'Browse Stores';
-  if (type === 'professional') title = 'Browse Professionals';
-  
-  if (category) {
-    const catDetails = await storeService.getCategoryBySlug(category);
-    if (catDetails) title = `Browse ${catDetails.name}`;
-  }
-  if (q) title = `Search results for "${q}"`;
-  if (location) title = `${title} in ${location}`;
-
-  return {
-    title: `${title} | Khidmatik`,
-    description: `Find local stores and professionals on Khidmatik. Search by keyword, category, and location. ${type ? `Showing ${type}s.` : ''}`,
-  };
+  return seoService.getSearchMetadata({ q, category, location, type });
 }
 
 export default async function ListingsPage({ searchParams: searchParamsPromise }: ListingsPageProps) {
@@ -50,7 +41,7 @@ export default async function ListingsPage({ searchParams: searchParamsPromise }
 
   // Filter by type on returned listings if query didn't restrict fully
   if (type) {
-    filteredListings = filteredListings.filter(listing => listing.type === type);
+    filteredListings = filteredListings.filter((listing) => listing.type === type);
   }
 
   if (capacity) {
@@ -76,7 +67,7 @@ export default async function ListingsPage({ searchParams: searchParamsPromise }
           return (listing as any).price <= maxPrice;
         }
         if (listing.type === 'store' && 'products' in listing && listing.products) {
-          return listing.products.some((product) => 
+          return listing.products.some((product) =>
             product.variants?.some((v) => v.price <= maxPrice)
           );
         }
@@ -101,8 +92,10 @@ export default async function ListingsPage({ searchParams: searchParamsPromise }
   const userSearchZip = location ? location.toLowerCase() : undefined;
   if (userSearchZip && (type === 'professional' || !type)) {
     filteredListings.sort((a, b) => {
-      const aIsNeighborhoodPro = a.type === 'professional' && (a as Professional).location.zipCode?.toLowerCase() === userSearchZip;
-      const bIsNeighborhoodPro = b.type === 'professional' && (b as Professional).location.zipCode?.toLowerCase() === userSearchZip;
+      const aIsNeighborhoodPro =
+        a.type === 'professional' && (a as Professional).location.zipCode?.toLowerCase() === userSearchZip;
+      const bIsNeighborhoodPro =
+        b.type === 'professional' && (b as Professional).location.zipCode?.toLowerCase() === userSearchZip;
 
       if (aIsNeighborhoodPro && !bIsNeighborhoodPro) return -1;
       if (!aIsNeighborhoodPro && bIsNeighborhoodPro) return 1;
@@ -114,25 +107,46 @@ export default async function ListingsPage({ searchParams: searchParamsPromise }
     if (type === 'store') {
       return {
         title: q ? `Search Stores for "${q}"` : category ? `Explore Stores` : `Explore Local Stores`,
-        desc: `Discover, shop, and review top-rated local stores and retail shops near you.`
+        desc: `Discover, shop, and review top-rated local stores and retail shops near you.`,
       };
     }
     if (type === 'professional') {
       return {
         title: q ? `Search Services for "${q}"` : category ? `Explore Local Services` : `Explore Professional Services`,
-        desc: `Discover, book, and review top-rated local professional service providers and technicians near you.`
+        desc: `Discover, book, and review top-rated local professional service providers and technicians near you.`,
       };
     }
     return {
       title: q ? `Search Results for "${q}"` : category ? `Explore Local Services` : `Explore Khidmatik Local`,
-      desc: `Discover, book, and review top-rated stores and professional service providers near you.`
+      desc: `Discover, book, and review top-rated stores and professional service providers near you.`,
     };
   };
 
   const headerInfo = getHeader();
 
+  const breadcrumbs = generateBreadcrumbSchema([
+    { name: 'Home / الرئيسية', url: '/' },
+    { name: type === 'store' ? 'Stores / المتاجر' : type === 'professional' ? 'Services / الخدمات' : 'Listings / الدليل', url: '/listings' },
+    ...(category ? [{ name: category, url: `/listings?category=${category}` }] : []),
+  ]);
+
+  const itemListSchema = {
+    '@context': 'https://schema.org',
+    '@type': 'ItemList',
+    name: headerInfo.title,
+    description: headerInfo.desc,
+    numberOfItems: filteredListings.length,
+    itemListElement: filteredListings.slice(0, 20).map((item, idx) => ({
+      '@type': 'ListItem',
+      position: idx + 1,
+      name: item.name,
+      url: `${siteConfig.url}/listings/${item.id}`,
+    })),
+  };
+
   return (
     <div className="container mx-auto px-4 py-8 space-y-6">
+      <JsonLd data={[breadcrumbs, itemListSchema]} />
       <header className="mb-6">
         <h1 className="text-3xl md:text-4xl font-headline font-bold mb-1">
           {headerInfo.title}
@@ -142,10 +156,14 @@ export default async function ListingsPage({ searchParams: searchParamsPromise }
         </p>
       </header>
 
-      <Suspense fallback={<div className="text-center py-12">Loading local search engine...</div>}>
-        <ListingsClientContainer 
-          initialListings={filteredListings} 
-          initialParams={{ q, category, location, neighborhood, type }} 
+      <Suspense fallback={
+        <div className="text-center py-20 flex flex-col items-center justify-center">
+          <ThinkingOrbs state="searching" size="lg" />
+        </div>
+      }>
+        <ListingsClientContainer
+          initialListings={filteredListings}
+          initialParams={{ q, category, location, neighborhood, type }}
         />
       </Suspense>
     </div>

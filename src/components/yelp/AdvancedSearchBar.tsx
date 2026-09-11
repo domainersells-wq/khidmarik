@@ -150,11 +150,11 @@ export function AdvancedSearchBar() {
 
     const params = new URLSearchParams();
     if (finalKeyword) params.set('q', finalKeyword);
-    if (finalLocation) params.set('location', finalLocation);
+    if (finalLocation) params.set('wilaya', finalLocation);
     if (neighborhood) params.set('neighborhood', neighborhood);
     if (currentType) params.set('type', currentType);
     
-    router.push(`/listings?${params.toString()}`);
+    router.push(`/search?${params.toString()}`);
     setIsFocused(false);
   };
 
@@ -457,7 +457,7 @@ export function AdvancedSearchBar() {
                             const params = new URLSearchParams();
                             params.set('category', sub.slug);
                             if (currentType) params.set('type', currentType);
-                            router.push(`/listings?${params.toString()}`);
+                            router.push(`/search?${params.toString()}`);
                             setActiveDropdown(null);
                           }}
                           className="w-full text-start px-3 py-2 text-sm font-medium hover:bg-muted rounded-lg transition-colors flex items-center gap-2.5"

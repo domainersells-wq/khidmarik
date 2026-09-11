@@ -24,6 +24,10 @@ import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase';
 import Image from 'next/image';
 import { useAuth } from '@/context/AuthContext';
+import { BusinessLocationManager } from '../common/BusinessLocationManager';
+
+const DEFAULT_LAT = 35.1903;
+const DEFAULT_LNG = -0.6309;
 
 interface StaffMember {
   id: string;
@@ -1496,50 +1500,46 @@ export function SettingsSection() {
                   </div>
                 )}
 
-                {/* 4. Physical Location rendering */}
+                {/* 4. Physical Location & Map Management rendering */}
                 {cat.key === 'location_settings' && (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div className="grid gap-1">
-                        <Label>Country</Label>
-                        <Input value={country} onChange={e => { setCountry(e.target.value); markDirty('location_settings'); }} />
-                      </div>
-                      <div className="grid gap-1">
-                        <Label>Wilaya (State) *</Label>
-                        <Input value={wilaya} onChange={e => { setWilaya(e.target.value); markDirty('location_settings'); }} />
-                      </div>
-                      <div className="grid gap-1">
-                        <Label>Commune (Municipal) *</Label>
-                        <Input value={commune} onChange={e => { setCommune(e.target.value); markDirty('location_settings'); }} />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="grid gap-1">
-                        <Label>Street Address Detail</Label>
-                        <Input value={address} onChange={e => { setAddress(e.target.value); markDirty('location_settings'); }} />
-                      </div>
-                      <div className="grid gap-1">
-                        <Label>Postal Zip Code</Label>
-                        <Input value={zipCode} onChange={e => { setZipCode(e.target.value); markDirty('location_settings'); }} />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="grid gap-1">
-                        <Label>GPS Coordinates (Latitude, Longitude)</Label>
-                        <Input value={gpsCoordinates} onChange={e => { setGpsCoordinates(e.target.value); markDirty('location_settings'); }} />
-                      </div>
-                      <div className="grid gap-1">
-                        <Label>Google Maps URL Location Link</Label>
-                        <Input value={googleMapsUrl} onChange={e => { setGoogleMapsUrl(e.target.value); markDirty('location_settings'); }} />
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end gap-2 pt-2 border-t">
-                      <Button variant="outline" size="sm" onClick={() => setDirtySections(prev => ({ ...prev, location_settings: false }))} className="h-8 text-xs"><Undo className="h-3.5 w-3.5" /> Reset</Button>
-                      <Button size="sm" onClick={handleSaveLocation} disabled={isSavingLocation} className="h-8 text-xs"><Save className="h-3.5 w-3.5" /> Save Section</Button>
-                    </div>
+                  <div className="space-y-4 pt-1">
+                    <BusinessLocationManager
+                      businessName={storeName || "متجري في خدماتك"}
+                      businessType="store"
+                      initialData={{
+                        address: address || '',
+                        city: commune || 'سيدي بلعباس',
+                        wilaya: wilaya || 'سيدي بلعباس',
+                        country: country || 'الجزائر / Algeria',
+                        latitude: gpsCoordinates?.includes(',') ? parseFloat(gpsCoordinates.split(',')[0]) : DEFAULT_LAT,
+                        longitude: gpsCoordinates?.includes(',') ? parseFloat(gpsCoordinates.split(',')[1]) : DEFAULT_LNG,
+                        isLocationPublic: true,
+                        isMobileService: false
+                      }}
+                      onSave={async (locData) => {
+                        setAddress(locData.address);
+                        setCommune(locData.city);
+                        setWilaya(locData.wilaya);
+                        setCountry(locData.country);
+                        setGpsCoordinates(`${locData.latitude},${locData.longitude}`);
+                        
+                        await saveSetting('location_settings', {
+                          address: locData.address,
+                          city: locData.city,
+                          wilaya: locData.wilaya,
+                          wilayaCode: locData.wilayaCode,
+                          country: locData.country,
+                          latitude: locData.latitude,
+                          longitude: locData.longitude,
+                          accuracy: locData.accuracy,
+                          isLocationPublic: locData.isLocationPublic,
+                          isMobileService: locData.isMobileService,
+                          serviceAreaRadius: locData.serviceAreaRadius,
+                          serviceWilayas: locData.serviceWilayas,
+                          updated_at: locData.updated_at
+                        });
+                      }}
+                    />
                   </div>
                 )}
 
@@ -2787,6 +2787,10 @@ export function SettingsSection() {
       {/* Visual Customer Preview Dialog */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
         <DialogContent className="sm:max-w-xl bg-white border text-slate-800 text-xs font-sans p-0 overflow-hidden">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Live Buyer Page Mockup Preview</DialogTitle>
+            <DialogDescription>Interactive preview of how the customer sees your store</DialogDescription>
+          </DialogHeader>
           <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
             <h3 className="font-bold flex items-center gap-1.5"><Eye className="h-4 w-4" /> Live Buyer Page Mockup Preview</h3>
             <span className="text-[10px] text-slate-400">Layout color scheme matches settings primary color: {primaryColor}</span>

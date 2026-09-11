@@ -157,7 +157,35 @@ export function ProfessionalServicesDashboardSidebar({
         </nav>
 
         {/* Footer */}
-        <div className={cn("mt-auto border-t p-3 transition-all duration-300", isCollapsed ? "flex justify-center" : "p-4")}>
+        <div className={cn("mt-auto border-t p-3 transition-all duration-300 flex flex-col gap-2", isCollapsed ? "items-center p-2" : "p-4")}>
+          {hasPermission('view_admin_dashboard') && (
+            isCollapsed ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    href="/admin/dashboard"
+                    className={cn(
+                      buttonVariants({ variant: 'default', size: 'icon' }),
+                      'h-10 w-10 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 shadow-sm'
+                    )}
+                  >
+                    <ShieldCheck className="h-5 w-5 text-emerald-400" />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="bg-slate-950 text-white text-xs border-none py-1.5 px-3 shadow-md font-sans rounded-md">
+                  Super Admin Hub
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <Button variant="default" className="w-full justify-start h-10 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900 font-semibold" asChild>
+                <Link href="/admin/dashboard">
+                  <ShieldCheck className="ltr:mr-2 rtl:ml-2 h-4 w-4 text-emerald-400 shrink-0" />
+                  <span className="truncate text-xs">Super Admin Hub</span>
+                </Link>
+              </Button>
+            )
+          )}
+
           {isCollapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>

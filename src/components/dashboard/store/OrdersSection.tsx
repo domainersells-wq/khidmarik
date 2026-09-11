@@ -158,9 +158,61 @@ export function OrdersSection() {
   };
 
   useEffect(() => {
-    if (user?.storeId) {
-      loadOrders();
-    }
+    let isMounted = true;
+    const initOrders = async () => {
+      if (user?.storeId) {
+        await loadOrders();
+      } else if (user?.id) {
+        try {
+          const { data: store } = await supabase
+            .from('stores')
+            .select('id')
+            .eq('owner_id', user.id)
+            .maybeSingle();
+          if (store && isMounted) {
+            setIsLoading(true);
+            const data = await orderService.getStoreOrders(store.id);
+            if (isMounted) {
+              const mappedOrders = data.map((o: any) => ({
+                id: o.id,
+                customerName: o.customer_name,
+                customerEmail: o.customer_email,
+                customerPhone: o.customer_phone,
+                shippingAddress: o.shipping_address,
+                billingAddress: o.billing_address,
+                paymentType: o.payment_type,
+                paymentStatus: o.payment_status,
+                date: o.created_at.split('T')[0],
+                total: parseFloat(o.total),
+                profit: parseFloat(o.profit),
+                status: o.status as OrderItem['status'],
+                items: o.order_items ? o.order_items.reduce((acc: number, item: any) => acc + item.quantity, 0) : 0,
+                productName: o.order_items && o.order_items.length > 0 ? o.order_items[0].product_name : 'N/A',
+                productImageUrl: o.order_items && o.order_items.length > 0 ? o.order_items[0].product_image_url : '',
+                returnStatus: 'none' as const,
+                marketplace: 'Khidmatik Store',
+                city: o.city || 'Algiers',
+                courier: o.courier || 'Yalidine',
+                trackingNumber: o.tracking_number || '',
+                lastUpdate: o.created_at,
+                customerNotes: o.customer_notes,
+                internalNotes: o.internal_notes,
+                timelineHistory: o.timeline_history
+              }));
+              setOrders(mappedOrders);
+            }
+          }
+        } catch (e) {
+          console.error(e);
+        } finally {
+          if (isMounted) setIsLoading(false);
+        }
+      } else {
+        setIsLoading(false);
+      }
+    };
+    initOrders();
+    return () => { isMounted = false; };
   }, [user]);
 
   const saveCatalog = async (updatedList: OrderItem[]) => {
@@ -629,7 +681,7 @@ export function OrdersSection() {
           </div>
 
           {isFilterExpanded && (
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 pt-2 border-t">
               <Select value={payStatusFilter} onValueChange={setPayStatusFilter}>
                 <SelectTrigger><SelectValue placeholder="Payment" /></SelectTrigger>
                 <SelectContent>

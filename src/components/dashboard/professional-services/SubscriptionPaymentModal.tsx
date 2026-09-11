@@ -99,11 +99,11 @@ export function SubscriptionPaymentModal({
 
   const theme = (plan.tier && TIER_THEMES[plan.tier]) ? TIER_THEMES[plan.tier] : defaultTheme;
 
-  const planPriceNumber = typeof plan.priceNumberDA === 'number'
-    ? plan.priceNumberDA
-    : (typeof plan.price === 'number' 
-      ? plan.price 
-      : (typeof plan.price === 'string' ? parseFloat(plan.price.replace(/[^\d.]/g, '')) || 2500 : 2500));
+  const planPriceNumber = typeof plan.price === 'number'
+    ? plan.price
+    : (typeof (plan as any).priceNumberDA === 'number'
+      ? (plan as any).priceNumberDA
+      : (typeof (plan as any).price === 'string' ? parseFloat((plan as any).price.replace(/[^\d.]/g, '')) || 2500 : 2500));
 
   const isWalletSufficient = userWalletBalance >= planPriceNumber;
   const planTitleAr = plan.nameAr || (plan as any).name || 'الباقة المختارة';

@@ -12,7 +12,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { AlertCircle, UploadCloud, Briefcase, Store, Sparkles, Loader2, UserCheck, Users, CheckCircle, DollarSign, FileUp, BadgeCheck, Globe } from "lucide-react";
 import Link from "next/link";
 import { useToast } from "@/hooks/use-toast";
-import { generateListingDescription, type GenerateListingDescriptionInput } from '@/ai/flows/generate-listing-description-flow';
 import { categories as allCategories } from '@/data/mock';
 import type { StoreSubscriptionPlan } from '@/types';
 import { supabase } from '@/lib/supabase';
@@ -47,7 +46,6 @@ export default function RegisterProviderPage() {
   const [listingType, setListingType] = useState<'store' | 'professional' | 'freelancer' | ''>('');
   const [businessName, setBusinessName] = useState('');
   const [categoryInput, setCategoryInput] = useState('');
-  const [descriptionKeywords, setDescriptionKeywords] = useState('');
   const [listingDescription, setListingDescription] = useState('');
   const [selectedPlan, setSelectedPlan] = useState<StoreSubscriptionPlan | ''>('');
   const [sponsor1Id, setSponsor1Id] = useState('');
@@ -62,44 +60,11 @@ export default function RegisterProviderPage() {
   const [idCardFile, setIdCardFile] = useState<File | null>(null);
   const [commercialRegisterFile, setCommercialRegisterFile] = useState<File | null>(null);
 
-
-  const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
 
   useEffect(() => {
     document.title = 'Register Your Business or Profession | Khidmatik';
   }, []);
-
-
-  const handleGenerateDescription = async () => {
-    if (!businessName || !listingType || !categoryInput || !descriptionKeywords) {
-      toast({
-        title: "Missing Information",
-        description: "Please fill in Business Name, Listing Type, Category, and Keywords before generating a description.",
-        variant: "destructive",
-      });
-      return;
-    }
-    setIsGeneratingDescription(true);
-    setListingDescription('');
-    try {
-      const input: GenerateListingDescriptionInput = { 
-        businessName, 
-        listingType: listingType === 'freelancer' ? 'professional' : listingType, 
-        category: categoryInput, 
-        keywords: descriptionKeywords 
-      };
-      const result = await generateListingDescription(input);
-      setListingDescription(result.generatedDescription);
-      toast({ title: "Description Generated!", description: "AI drafted a description." });
-    } catch (error) {
-      console.error("Error generating listing description:", error);
-      toast({ title: "Error Generating Description", description: "Could not generate. Please try again or write your own.", variant: "destructive" });
-    } finally {
-      setIsGeneratingDescription(false);
-    }
-  };
 
   const validateForm = () => {
     if (!contactName.trim()) { toast({ title: "Validation Error", description: "Contact name is required.", variant: "destructive" }); return false; }
@@ -128,7 +93,7 @@ export default function RegisterProviderPage() {
 
   const resetForm = () => {
     setContactName(''); setEmail(''); setPassword(''); setConfirmPassword(''); setListingType('');
-    setBusinessName(''); setCategoryInput(''); setDescriptionKeywords(''); setListingDescription('');
+    setBusinessName(''); setCategoryInput(''); setListingDescription('');
     setSelectedPlan(''); setSponsor1Id(''); setSponsor2Id('');
     setFreelancerTagline(''); setFreelancerSkills(''); setFreelancerCategory('web-development'); setFreelancerBasePrice('5000');
     setIdCardFile(null); setCommercialRegisterFile(null);
@@ -356,16 +321,6 @@ export default function RegisterProviderPage() {
               <div className="space-y-2">
                 <Label htmlFor="listingDescription">Listing Description *</Label>
                 <Textarea id="listingDescription" placeholder="Describe your business or service..." rows={4} value={listingDescription} onChange={(e) => setListingDescription(e.target.value)} required />
-              </div>
-              <div className="space-y-2 p-4 border rounded-md bg-muted/30">
-                <Label htmlFor="descriptionKeywords" className="flex items-center">
-                  <Sparkles className="mr-2 h-4 w-4 text-primary" /> Keywords for AI Description (Helps AI generate better text)
-                </Label>
-                <Textarea id="descriptionKeywords" placeholder="e.g., family-friendly, authentic Italian OR 24/7 emergency, licensed" rows={2} value={descriptionKeywords} onChange={(e) => setDescriptionKeywords(e.target.value)} />
-                <Button type="button" variant="outline" size="sm" onClick={handleGenerateDescription} disabled={isGeneratingDescription || !listingType || !businessName || !categoryInput || !descriptionKeywords} className="mt-2">
-                  {isGeneratingDescription ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />} Generate with AI
-                </Button>
-                {(!listingType || !businessName || !categoryInput || !descriptionKeywords) && !isGeneratingDescription && (<p className="text-xs text-muted-foreground mt-1">Fill required fields above to enable AI.</p>)}
               </div>
             </div>
 

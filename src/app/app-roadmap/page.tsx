@@ -1,12 +1,14 @@
 
+import type { Metadata } from 'next';
+import { constructMetadata } from '@/lib/seo/metadata';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle, ListChecks, MessageCircle, PackageCheck, SearchCode, ShieldCheck, Sparkles, Users, Zap } from "lucide-react";
-import type { Metadata } from 'next';
 
-export const metadata: Metadata = {
-  title: 'App Roadmap | Khidmatik',
-  description: 'Future feature ideas and roadmap for the Khidmatik application.',
-};
+export const metadata: Metadata = constructMetadata({
+  title: 'App Roadmap & Upcoming Innovations | خارطة طريق منصة خدماتك',
+  description: 'Explore upcoming features, AI integrations, escrow innovations, and community expansion roadmap for Khidmatik.',
+  canonicalUrl: '/app-roadmap',
+});
 
 const features = [
   {

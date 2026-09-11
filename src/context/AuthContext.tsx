@@ -1,24 +1,13 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase';
+import { AppRole, AppPermission, UserRole, normalizeRole, ROLE_PERMISSIONS_MAP } from '@/types/rbac';
+import { hasPermission as rbacHasPermission, hasRole as rbacHasRole, hasAnyPermission as rbacHasAnyPermission, hasAnyRole as rbacHasAnyRole, hasAllPermissions as rbacHasAllPermissions, getPermissionsForRoles } from '@/lib/auth/rbac';
 
-export type UserRole = 
-  | 'super_admin'
-  | 'store_owner'
-  | 'service_provider'
-  | 'seller'
-  | 'supplier'
-  | 'employee'
-  | 'accountant'
-  | 'branch_manager'
-  | 'support_agent'
-  | 'delivery_rider'
-  | 'marketing_manager'
-  | 'franchisee'
-  | 'customer'; // Added customer
+export type { UserRole, AppRole, AppPermission };
 
 export interface UserSession {
   id: string;
@@ -26,6 +15,7 @@ export interface UserSession {
   email: string;
   avatarUrl: string;
   role: UserRole;
+  roles?: AppRole[];
   isStoreOwner?: boolean;
   storeId?: string;
   isFreelancer?: boolean;
@@ -36,66 +26,18 @@ export interface UserSession {
 interface AuthContextType {
   user: UserSession | null;
   role: UserRole | null;
-  permissions: string[];
+  roles: AppRole[];
+  permissions: AppPermission[];
   isLoading: boolean;
   login: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string, name?: string) => Promise<boolean>;
   logout: () => void;
-  hasPermission: (permission: string) => boolean;
+  hasPermission: (permission: AppPermission | string) => boolean;
+  hasAnyPermission: (permissions: (AppPermission | string)[]) => boolean;
+  hasAllPermissions: (permissions: (AppPermission | string)[]) => boolean;
+  hasRole: (role: AppRole | string) => boolean;
+  hasAnyRole: (roles: (AppRole | string)[]) => boolean;
 }
-
-const RolePermissions: Record<UserRole, string[]> = {
-  super_admin: ['manage_all'],
-  store_owner: [
-    'view_store_dashboard',
-    'create_order', 'edit_order', 'delete_order',
-    'manage_products', 'manage_inventory',
-    'manage_settings', 'view_store_reports'
-  ],
-  service_provider: [
-    'view_services_dashboard',
-    'manage_appointments', 'manage_services',
-    'manage_settings'
-  ],
-  seller: [
-    'view_store_dashboard',
-    'create_order', 'edit_order',
-    'manage_products'
-  ],
-  supplier: [
-    'view_store_dashboard',
-    'manage_inventory'
-  ],
-  employee: [
-    'view_store_dashboard'
-  ],
-  accountant: [
-    'view_store_dashboard',
-    'manage_reports'
-  ],
-  branch_manager: [
-    'view_store_dashboard',
-    'manage_products', 'manage_inventory', 'manage_settings'
-  ],
-  support_agent: [
-    'view_store_dashboard',
-    'view_services_dashboard'
-  ],
-  delivery_rider: [
-    'view_store_dashboard'
-  ],
-  marketing_manager: [
-    'view_store_dashboard',
-    'manage_reports'
-  ],
-  franchisee: [
-    'view_store_dashboard',
-    'manage_settings'
-  ],
-  customer: [
-    'create_order'
-  ]
-};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -105,8 +47,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { toast } = useToast();
   const router = useRouter();
 
-  // Helper to load profile from DB
+  // Helper to load profile and roles from DB
   const loadProfile = async (uid: string, email: string): Promise<UserSession | null> => {
+    const userEmail = email.toLowerCase().trim();
+    const isAdminEmail = (
+      userEmail === 'admin@khidmatik.dz' || 
+      userEmail === 'domainersells@gmail.com' ||
+      (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_ADMIN_EMAILS && process.env.NEXT_PUBLIC_ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()).includes(userEmail))
+    );
+    const fallbackRole = isAdminEmail ? 'super_admin' : 'customer';
+    const norm = normalizeRole(fallbackRole);
+    const defaultFallbackSession: UserSession = {
+      id: uid,
+      name: email ? email.split('@')[0] : 'User',
+      email: email || '',
+      avatarUrl: `https://api.dicebear.com/7.x/initials/svg?seed=${email || uid}`,
+      role: fallbackRole as UserRole,
+      roles: [norm],
+      memberSince: new Date().toISOString(),
+      walletBalance: 0,
+    };
+
     try {
       const { data: profile, error } = await supabase
         .from('profiles')
@@ -115,47 +76,89 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .maybeSingle();
 
       if (error) {
-        console.error('Error loading user profile:', error.message);
-        return null;
+        console.warn('Could not load profile from database (offline/network):', error.message);
+        return defaultFallbackSession;
       }
 
       if (!profile) {
-        // Fallback: create standard profile if DB trigger did not fire
-        const fallbackRole = (email === 'admin@khidmatik.dz' || email === 'domainersells@gmail.com') ? 'super_admin' : 'customer';
-        const { data: newProfile } = await supabase
-          .from('profiles')
-          .insert({
-            id: uid,
-            name: email.split('@')[0],
-            email: email,
-            role: fallbackRole,
-            avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${email}`
-          })
-          .select()
-          .single();
+        try {
+          const { data: newProfile } = await supabase
+            .from('profiles')
+            .insert({
+              id: uid,
+              name: email.split('@')[0],
+              email: email,
+              role: fallbackRole,
+              avatar_url: `https://api.dicebear.com/7.x/initials/svg?seed=${email}`
+            })
+            .select()
+            .single();
 
-        if (newProfile) {
-          return {
-            id: newProfile.id,
-            name: newProfile.name,
-            email: newProfile.email,
-            avatarUrl: newProfile.avatar_url || '',
-            role: newProfile.role as UserRole,
-            memberSince: newProfile.member_since,
-            walletBalance: parseFloat(newProfile.wallet_balance || 0),
-          };
+          if (newProfile) {
+            const newNorm = normalizeRole(newProfile.role);
+            return {
+              id: newProfile.id,
+              name: newProfile.name,
+              email: newProfile.email,
+              avatarUrl: newProfile.avatar_url || '',
+              role: newProfile.role as UserRole,
+              roles: [newNorm],
+              memberSince: newProfile.member_since,
+              walletBalance: parseFloat(newProfile.wallet_balance || 0),
+            };
+          }
+        } catch {
+          // Fallback to local session if DB insert fails
         }
-        return null;
+        return defaultFallbackSession;
       }
 
       // Check if user has a store
       let storeId: string | undefined;
-      const { data: store } = await supabase
-        .from('stores')
-        .select('id')
-        .eq('owner_id', uid)
-        .maybeSingle();
-      if (store) storeId = store.id;
+      try {
+        const { data: store } = await supabase
+          .from('stores')
+          .select('id')
+          .eq('owner_id', uid)
+          .maybeSingle();
+        if (store) storeId = store.id;
+      } catch {
+        // Optional store lookup
+      }
+
+      // Extract user roles
+      const userEmail = (email || '').toLowerCase().trim();
+      const isAdminEmail = (
+        userEmail === 'admin@khidmatik.dz' || 
+        userEmail === 'domainersells@gmail.com' ||
+        (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_ADMIN_EMAILS && process.env.NEXT_PUBLIC_ADMIN_EMAILS.split(',').map(e => e.trim().toLowerCase()).includes(userEmail))
+      );
+      const isDbSuper = profile.role === 'super_admin' || profile.role === 'SUPER_ADMIN';
+      const effectiveRole = (isAdminEmail || isDbSuper) ? 'super_admin' : profile.role;
+      const primaryNorm = normalizeRole(effectiveRole);
+      const userRoles: AppRole[] = [primaryNorm];
+      if ((isAdminEmail || isDbSuper) && !userRoles.includes('SUPER_ADMIN')) {
+        userRoles.push('SUPER_ADMIN');
+      }
+
+      // Query multi-roles table if present
+      try {
+        const { data: multiRoles } = await supabase
+          .from('user_roles')
+          .select('role')
+          .eq('user_id', uid);
+
+        if (multiRoles && Array.isArray(multiRoles)) {
+          for (const mr of multiRoles) {
+            const rNorm = normalizeRole(mr.role);
+            if (!userRoles.includes(rNorm)) {
+              userRoles.push(rNorm);
+            }
+          }
+        }
+      } catch {
+        // user_roles table optional fallback
+      }
 
       return {
         id: profile.id,
@@ -163,15 +166,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: profile.email,
         avatarUrl: profile.avatar_url || `https://api.dicebear.com/7.x/initials/svg?seed=${profile.name}`,
         role: profile.role as UserRole,
-        isStoreOwner: profile.role === 'store_owner',
+        roles: userRoles,
+        isStoreOwner: profile.role === 'store_owner' || userRoles.includes('STORE_OWNER'),
         storeId,
-        isFreelancer: profile.role === 'service_provider',
+        isFreelancer: profile.role === 'service_provider' || userRoles.includes('SERVICE_PROVIDER'),
         memberSince: profile.member_since,
         walletBalance: parseFloat(profile.wallet_balance || 0)
       };
-    } catch (e) {
-      console.error('Failed profile fetch exception:', e);
-      return null;
+    } catch (e: any) {
+      console.warn('Network exception while loading user profile, using fallback session:', e?.message || e);
+      return defaultFallbackSession;
     }
   };
 
@@ -180,29 +184,44 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let authListener: any;
 
     const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        const profile = await loadProfile(session.user.id, session.user.email || '');
-        setUser(profile);
-      } else {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          const profile = await loadProfile(session.user.id, session.user.email || '');
+          setUser(profile);
+        } else {
+          setUser(null);
+        }
+      } catch (err) {
+        console.warn('Could not initialize Supabase session:', err);
         setUser(null);
+      } finally {
+        setIsLoading(false);
       }
-      setIsLoading(false);
 
       // Set up onAuthStateChange callback
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        async (event, currentSession) => {
-          setIsLoading(true);
-          if (currentSession?.user) {
-            const profile = await loadProfile(currentSession.user.id, currentSession.user.email || '');
-            setUser(profile);
-          } else {
-            setUser(null);
+      try {
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(
+          async (event, currentSession) => {
+            setIsLoading(true);
+            try {
+              if (currentSession?.user) {
+                const profile = await loadProfile(currentSession.user.id, currentSession.user.email || '');
+                setUser(profile);
+              } else {
+                setUser(null);
+              }
+            } catch {
+              setUser(null);
+            } finally {
+              setIsLoading(false);
+            }
           }
-          setIsLoading(false);
-        }
-      );
-      authListener = subscription;
+        );
+        authListener = subscription;
+      } catch (err) {
+        console.warn('Could not subscribe to Supabase auth state:', err);
+      }
     };
 
     initAuth();
@@ -239,11 +258,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         });
 
         // Role-based routing
-        if (profile.role === 'super_admin') {
+        const isSuper = profile.roles?.includes('SUPER_ADMIN') || profile.role === 'super_admin';
+        const isStore = profile.roles?.includes('STORE_OWNER') || profile.role === 'store_owner';
+        const isProvider = profile.roles?.includes('SERVICE_PROVIDER') || profile.role === 'service_provider';
+
+        if (isSuper) {
           router.push('/admin/dashboard');
-        } else if (profile.role === 'store_owner') {
+        } else if (isStore) {
           router.push('/dashboard/store');
-        } else if (profile.role === 'service_provider') {
+        } else if (isProvider) {
           router.push('/dashboard/professional-services');
         } else {
           router.push('/');
@@ -316,16 +339,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     router.push('/');
   };
 
-  const permissions = user ? RolePermissions[user.role] || [] : [];
+  const roles = useMemo<AppRole[]>(() => {
+    if (!user) return [];
+    if (user.roles && user.roles.length > 0) return user.roles;
+    return [normalizeRole(user.role)];
+  }, [user]);
 
-  const hasPermission = (permission: string): boolean => {
-    if (!user) return false;
-    if (user.role === 'super_admin' || permissions.includes('manage_all')) return true;
-    return permissions.includes(permission);
+  const permissions = useMemo<AppPermission[]>(() => {
+    if (!user) return [];
+    return getPermissionsForRoles(roles);
+  }, [user, roles]);
+
+  const hasPermission = (permission: AppPermission | string): boolean => {
+    return rbacHasPermission(user, permission as AppPermission);
+  };
+
+  const hasAnyPermission = (perms: (AppPermission | string)[]): boolean => {
+    return rbacHasAnyPermission(user, perms as AppPermission[]);
+  };
+
+  const hasAllPermissions = (perms: (AppPermission | string)[]): boolean => {
+    return rbacHasAllPermissions(user, perms as AppPermission[]);
+  };
+
+  const hasRole = (role: AppRole | string): boolean => {
+    return rbacHasRole(user, role);
+  };
+
+  const hasAnyRole = (checkRoles: (AppRole | string)[]): boolean => {
+    return rbacHasAnyRole(user, checkRoles);
   };
 
   return (
-    <AuthContext.Provider value={{ user, role: user?.role || null, permissions, isLoading, login, signUp, logout, hasPermission }}>
+    <AuthContext.Provider value={{
+      user,
+      role: user?.role || null,
+      roles,
+      permissions,
+      isLoading,
+      login,
+      signUp,
+      logout,
+      hasPermission,
+      hasAnyPermission,
+      hasAllPermissions,
+      hasRole,
+      hasAnyRole
+    }}>
       {children}
     </AuthContext.Provider>
   );

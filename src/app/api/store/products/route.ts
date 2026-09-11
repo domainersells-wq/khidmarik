@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/lib/supabase';
 import type { ProductItem } from '@/types';
+import { validateApiAuth } from '@/lib/auth/serverAuth';
 
 // GET /api/store/products
 export async function GET() {
@@ -16,8 +17,13 @@ export async function GET() {
 }
 
 // POST /api/store/products
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const authResult = await validateApiAuth(request, { requiredPermissions: ['manage_products'] });
+    if (!authResult.authorized && authResult.response) {
+      return authResult.response;
+    }
+
     const body = await request.json();
     const { product, catalog } = body as { product?: ProductItem; catalog?: ProductItem[] };
 

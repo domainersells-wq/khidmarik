@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,8 +12,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { partCategories } from '@/data/mock';
 import type { PartCondition } from '@/types';
-import { ArrowLeft, UploadCloud, PackagePlus, ShieldCheck, Info } from 'lucide-react';
+import { ArrowLeft, UploadCloud, PackagePlus, ShieldCheck, Info, Loader2 } from 'lucide-react';
 import Link from 'next/link';
+import { useAuth } from '@/context/AuthContext';
+import { partsService } from '@/services/partsService';
 
 const partConditionOptions: { value: PartCondition; label: string }[] = [
   { value: 'used-working', label: 'Used - Working Well' },
@@ -22,6 +25,8 @@ const partConditionOptions: { value: PartCondition; label: string }[] = [
 ];
 
 export default function ListNewPartPage() {
+  const router = useRouter();
+  const { user } = useAuth();
   const { toast } = useToast();
   const [partName, setPartName] = useState('');
   const [originalDeviceName, setOriginalDeviceName] = useState('');
@@ -50,32 +55,51 @@ export default function ListNewPartPage() {
         return;
     }
 
+    if (!user) {
+      toast({
+        title: "تسجيل الدخول مطلوب / Login Required",
+        description: "يرجى تسجيل الدخول أولاً لإدراج قطعة في المتجر.",
+        variant: "destructive"
+      });
+      router.push('/login?redirect=/marketplace/list-new');
+      return;
+    }
+
     setIsSubmitting(true);
-    await new Promise(resolve => setTimeout(resolve, 300)); 
+    try {
+      await partsService.listPart({
+        userId: user.id,
+        partName: partName.trim(),
+        originalDeviceName: originalDeviceName.trim(),
+        description: sellerNotes.trim(),
+        categorySlug,
+        price: parseFloat(price),
+        condition: condition as PartCondition,
+        imageUrls: [],
+        location: {
+          city: 'Algiers',
+          wilayaCode: '16',
+        }
+      });
 
-    console.log("Part Listing Submitted:", {
-      partName,
-      originalDeviceName,
-      condition,
-      price: parseFloat(price),
-      categorySlug,
-      sellerNotes,
-    });
+      toast({
+        title: "تم نشر الإعلان بنجاح! / Part Listed Successfully!",
+        description: `${partName} معروضة الآن في السوق المفتوح.`,
+        variant: "default",
+        duration: 5000, 
+      });
 
-    toast({
-      title: "Part Listed Successfully!",
-      description: `${partName} is now available in the Marketplace.`,
-      variant: "default",
-      duration: 4000, 
-    });
-
-    setPartName('');
-    setOriginalDeviceName('');
-    setCondition('');
-    setPrice('');
-    setCategorySlug('');
-    setSellerNotes('');
-    setIsSubmitting(false);
+      router.push('/marketplace');
+    } catch (err: any) {
+      console.error("Error listing marketplace item:", err);
+      toast({
+        title: "خطأ في الإدراج / Listing Error",
+        description: err.message || "حدث خطأ أثناء حفظ القطعة في السوق.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -216,8 +240,15 @@ export default function ListNewPartPage() {
             </div>
 
 
-            <Button type="submit" className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-3 text-md" disabled={isSubmitting}>
-              {isSubmitting ? 'Listing Part...' : 'List Your Part'}
+            <Button type="submit" className="w-full bg-primary hover:bg-primary/90 text-primary-foreground py-3 text-md flex items-center justify-center gap-2" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <span>جاري نشر الإعلان... / Listing Item...</span>
+                </>
+              ) : (
+                'نشر الإعلان في المتجر / List Your Part'
+              )}
             </Button>
           </form>
         </CardContent>

@@ -29,7 +29,8 @@ import {
   Webhook,
   MessageSquare,
   RotateCcw,
-  GitCompare
+  GitCompare,
+  ShieldCheck
 } from 'lucide-react';
 import { AppLogo } from '@/components/layout/AppLogo';
 import { useLanguage } from '@/context/LanguageContext';
@@ -39,6 +40,7 @@ interface DashboardSidebarProps {
   onLinkClick?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  className?: string;
 }
 
 const navItems = [
@@ -63,8 +65,7 @@ const navItems = [
   { href: 'team', label: 'Team', translationKey: 'teamManagement', icon: Users },
   { href: 'delivery-settings', label: 'Delivery Settings', translationKey: 'deliverySettings', icon: MapPin },
   { href: 'subscription', label: 'Subscription', translationKey: 'subscription', icon: Award },
-  { href: 'webhooks', label: 'Webhooks', translationKey: 'webhooks', icon: Webhook },
-  { href: 'ai-assistant', label: 'AI Seller Assistant', translationKey: 'aiSellerAssistant', icon: Sparkles }
+  { href: 'webhooks', label: 'Webhooks', translationKey: 'webhooks', icon: Webhook }
 ];
 
 const navItemPermissions: Record<string, string> = {
@@ -73,8 +74,8 @@ const navItemPermissions: Record<string, string> = {
   'scheduled-orders': 'view_store_dashboard',
   'new-order': 'create_order',
   'failure-management': 'view_store_dashboard',
-  'analytics': 'view_store_reports',
-  'stock-inventory': 'manage_inventory',
+  'analytics': 'view_analytics',
+  'stock-inventory': 'manage_products',
   'products': 'manage_products',
   'shipments': 'view_store_dashboard',
   'reviews': 'view_store_dashboard',
@@ -82,18 +83,17 @@ const navItemPermissions: Record<string, string> = {
   'compare-wishlist': 'view_store_dashboard',
   'sales-channels': 'manage_settings',
   'dispatch-orders': 'view_store_dashboard',
-  'financials': 'view_store_reports',
-  'payments': 'view_store_reports',
+  'financials': 'view_store_dashboard',
+  'payments': 'view_store_dashboard',
   'settings': 'manage_settings',
-  'suppliers': 'manage_inventory',
+  'suppliers': 'manage_products',
   'team': 'manage_settings',
   'delivery-settings': 'manage_settings',
   'subscription': 'manage_settings',
-  'webhooks': 'manage_settings',
-  'ai-assistant': 'view_store_dashboard'
+  'webhooks': 'manage_settings'
 };
 
-export function DashboardSidebar({ onLinkClick, isCollapsed = false, onToggleCollapse }: DashboardSidebarProps) {
+export function DashboardSidebar({ onLinkClick, isCollapsed = false, onToggleCollapse, className }: DashboardSidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const currentSection = searchParams.get('section') || 'overview';
@@ -111,7 +111,8 @@ export function DashboardSidebar({ onLinkClick, isCollapsed = false, onToggleCol
       <aside className={cn(
         "fixed inset-y-0 z-20 flex h-full flex-col border-r bg-card text-card-foreground shadow-sm transition-all duration-300 ease-in-out overflow-hidden custom-sidebar-scrollbar",
         "ltr:left-0 ltr:border-r rtl:right-0 rtl:border-l",
-        isCollapsed ? "w-[80px]" : "w-[300px]"
+        isCollapsed ? "w-[80px]" : "w-[300px]",
+        className
       )}>
         {/* Header container */}
         <div className={cn(
@@ -197,7 +198,35 @@ export function DashboardSidebar({ onLinkClick, isCollapsed = false, onToggleCol
         </nav>
 
         {/* Footer */}
-        <div className={cn("mt-auto border-t p-3 transition-all duration-300", isCollapsed ? "flex justify-center" : "p-4")}>
+        <div className={cn("mt-auto border-t p-3 transition-all duration-300 flex flex-col gap-2", isCollapsed ? "items-center p-2" : "p-4")}>
+          {hasPermission('view_admin_dashboard') && (
+            isCollapsed ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Link
+                    href="/admin/dashboard"
+                    className={cn(
+                      buttonVariants({ variant: 'default', size: 'icon' }),
+                      'h-10 w-10 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 shadow-sm'
+                    )}
+                  >
+                    <ShieldCheck className="h-5 w-5 text-emerald-400" />
+                  </Link>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="bg-slate-950 text-white text-xs border-none py-1.5 px-3 shadow-md font-sans rounded-md">
+                  Super Admin Hub
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <Button variant="default" className="w-full justify-start h-10 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white dark:bg-slate-100 dark:text-slate-900 font-semibold" asChild>
+                <Link href="/admin/dashboard">
+                  <ShieldCheck className="ltr:mr-2 rtl:ml-2 h-4 w-4 text-emerald-400 shrink-0" />
+                  <span className="truncate text-xs">Super Admin Hub</span>
+                </Link>
+              </Button>
+            )
+          )}
+
           {isCollapsed ? (
             <Tooltip>
               <TooltipTrigger asChild>

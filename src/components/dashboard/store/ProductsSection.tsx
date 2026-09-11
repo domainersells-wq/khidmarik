@@ -688,7 +688,7 @@ export function ProductsSection() {
           </CardTitle>
           <CardDescription>Manage your product catalog, stock levels, pricing, and variants.</CardDescription>
         </div>
-        <div className="flex gap-2 mt-4 md:mt-0">
+        <div className="flex flex-wrap items-center gap-2 mt-4 md:mt-0">
           {/* Bulk Import */}
           <Dialog open={isBulkImportOpen} onOpenChange={setIsBulkImportOpen}>
             <DialogTrigger asChild>

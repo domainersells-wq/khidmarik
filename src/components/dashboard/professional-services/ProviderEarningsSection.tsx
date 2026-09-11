@@ -14,6 +14,7 @@ import { useState, useEffect } from 'react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { financialService } from '@/services/financialService';
 
 const defaultTransactions = [
   { id: 'txn_001', date: '2024-07-10', description: 'Payment for Project #PROJ002 (Leila A.)', type: 'Service Payment', amount: 15000, status: 'Paid', invoiceId: 'INV001' },
@@ -170,6 +171,20 @@ export function ProviderEarningsSection() {
 
     try {
       const code = 'WD-' + Date.now().toString().slice(-6);
+      
+      // Submit through authoritative financialService
+      try {
+        await financialService.requestWithdrawal(
+          user.id,
+          amount,
+          'Algérie Poste (CCP)',
+          selectedPayoutMethod || '0022334455',
+          '00799999002233445588'
+        );
+      } catch (finErr) {
+        console.warn('financialService withdrawal fallback:', finErr);
+      }
+
       const { error } = await supabase
         .from('transactions')
         .insert({

@@ -1,234 +1,411 @@
-
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import React, { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Briefcase, Users, CalendarDays, Search, Filter, Settings, Eye, ToggleLeft, ToggleRight, ShieldAlert, MoreVertical, ListFilter, ListChecks, ShieldCheck as VerifiedBadgeIcon, Star } from 'lucide-react';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
+import { 
+  Briefcase, Users, Star, ShieldCheck, CheckCircle2, XCircle, 
+  Eye, Phone, Mail, MapPin, Award, FileText, Ban, RefreshCw, Wallet
+} from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import type { PlatformServiceProvider } from '@/types';
-import { storeService } from '@/services/storeService';
-import { categories as allCategories } from '@/data/mock'; 
-import { formatDistanceToNow } from 'date-fns';
+import { adminDataService, AdminProvider } from '@/services/adminDataService';
+import { AdminDataTable, ColumnDef, FilterOption, BulkAction } from '@/components/admin/shared/AdminDataTable';
+import { AdminDetailDrawer } from '@/components/admin/shared/AdminDetailDrawer';
+import { AdminConfirmModal } from '@/components/admin/shared/AdminConfirmModal';
 
 export function ServiceProviderManagementSection() {
   const { toast } = useToast();
-  const [serviceProviders, setServiceProviders] = useState<PlatformServiceProvider[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterCategory, setFilterCategory] = useState('all');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'suspended' | 'pending_review' | 'rejected'>('all');
+  const [providers, setProviders] = useState<AdminProvider[]>([]);
+  const [selectedProvider, setSelectedProvider] = useState<AdminProvider | null>(null);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+
+  const [confirmState, setConfirmState] = useState<{
+    isOpen: boolean;
+    title: string;
+    description: string;
+    action: () => void;
+    variant: 'danger' | 'warning' | 'info' | 'success';
+  }>({
+    isOpen: false,
+    title: '',
+    description: '',
+    action: () => {},
+    variant: 'warning',
+  });
+
+  const loadData = () => {
+    setProviders(adminDataService.getProviders());
+  };
 
   useEffect(() => {
-    const fetchProviders = async () => {
-      try {
-        const pros = await storeService.getStores({ type: 'professional' });
-        const free = await storeService.getStores({ type: 'freelancer' });
-        const allProviders = [...pros, ...free];
-
-        const mapped = allProviders.map((s: any) => ({
-          id: s.id,
-          providerName: s.name,
-          ownerName: s.contact?.phone || 'Professional',
-          contactEmail: s.contact?.email || 'professional@khidmatik.dz',
-          serviceCategory: s.category || 'Manual Labor',
-          status: 'active' as const,
-          creationDate: new Date().toISOString(),
-          applicationDate: new Date().toISOString(),
-          totalCompletedJobs: 18,
-          averageRating: s.averageRating || 5.0,
-          pendingServiceApproval: false
-        }));
-        setServiceProviders(mapped);
-      } catch (err) {
-        console.error('Failed to load service providers:', err);
-      }
-    };
-    fetchProviders();
+    loadData();
   }, []);
 
-  const handleToggleStatus = (providerId: string, currentStatus: PlatformServiceProvider['status']) => {
-    const newStatus: PlatformServiceProvider['status'] = currentStatus === 'active' ? 'suspended' : 'active';
-    setServiceProviders(prev => prev.map(provider => provider.id === providerId ? { ...provider, status: newStatus } : provider));
-    toast({ title: "Provider Status Updated (Conceptual)", description: `Provider ID ${providerId} status changed to ${newStatus}. This would update Firestore.` });
-  };
-  
-  const handleApproveServices = (providerId: string, providerName: string) => {
-    toast({ title: `Approve Services for ${providerName} (Conceptual)`, description: `Marking services of provider ID ${providerId} as approved. This would update relevant service documents in Firestore.` });
-  };
-
-  const handleAssignBadge = (providerId: string, badgeType: 'Verified' | 'Featured') => {
-    toast({ title: `${badgeType} Badge Assigned (Conceptual)`, description: `Service provider ID ${providerId} assigned ${badgeType} badge. This would update Firestore.`});
-  };
-  
-  const handleViewServices = (providerId: string, providerName: string) => {
-    toast({ title: `View Services for ${providerName} (Conceptual)`, description: `Navigating to service list for provider ID ${providerId}.`});
+  const handleStatusChange = (providerId: string, newStatus: AdminProvider['status']) => {
+    adminDataService.updateProviderStatus(providerId, newStatus);
+    loadData();
+    if (selectedProvider && selectedProvider.id === providerId) {
+      setSelectedProvider({ ...selectedProvider, status: newStatus });
+    }
+    toast({
+      title: 'Provider Status Updated',
+      description: `Status changed to ${newStatus}.`,
+    });
   };
 
-  const filteredProviders = serviceProviders.filter(provider => {
-    const matchesSearch = provider.providerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          provider.contactEmail.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = filterCategory === 'all' || provider.serviceCategory === filterCategory;
-    const matchesStatus = filterStatus === 'all' || provider.status === filterStatus;
-    return matchesSearch && matchesCategory && matchesStatus;
-  });
-  
-  const professionalCategories = allCategories.filter(c => c.type === 'professional' || c.type === 'all');
+  const handleToggleVerified = (providerId: string) => {
+    const list = adminDataService.getProviders();
+    const target = list.find((p) => p.id === providerId);
+    if (!target) return;
+    target.isVerified = !target.isVerified;
+    if (target.isVerified) target.identityDocumentStatus = 'verified';
+    adminDataService.saveProviders(list);
+    adminDataService.recordAudit('Super Admin', 'UPDATE', 'Provider', providerId, `Toggled verification badge to ${target.isVerified}`);
+    loadData();
+    if (selectedProvider && selectedProvider.id === providerId) {
+      setSelectedProvider({ ...target });
+    }
+    toast({
+      title: 'Badge Updated',
+      description: `Provider verification status is now ${target.isVerified ? 'VERIFIED' : 'UNVERIFIED'}.`,
+    });
+  };
 
+  const filterOptions: FilterOption[] = [
+    {
+      key: 'status',
+      label: 'Status',
+      options: [
+        { label: 'Active', value: 'active' },
+        { label: 'Pending Review', value: 'pending_review' },
+        { label: 'Suspended', value: 'suspended' },
+        { label: 'Rejected', value: 'rejected' },
+      ],
+    },
+    {
+      key: 'category',
+      label: 'Category',
+      options: [
+        { label: 'Plumbing & Heating', value: 'Plumbing & Heating' },
+        { label: 'Electrical & Solar', value: 'Electrical & Solar' },
+        { label: 'HVAC & Air Conditioning', value: 'HVAC & Air Conditioning' },
+        { label: 'Carpentry & Windows', value: 'Carpentry & Windows' },
+        { label: 'Painting & Finishing', value: 'Painting & Finishing' },
+        { label: 'Automotive & Towing', value: 'Automotive & Towing' },
+      ],
+    },
+  ];
+
+  const bulkActions: BulkAction<AdminProvider>[] = [
+    {
+      label: 'Verify Selected',
+      icon: ShieldCheck,
+      variant: 'default',
+      action: (selected) => {
+        setConfirmState({
+          isOpen: true,
+          title: `Verify ${selected.length} Providers`,
+          description: `Grant official Khidmatik Verified Badge to ${selected.length} providers?`,
+          variant: 'success',
+          action: () => {
+            const list = adminDataService.getProviders();
+            const ids = new Set(selected.map((s) => s.id));
+            list.forEach((p) => {
+              if (ids.has(p.id)) {
+                p.isVerified = true;
+                p.identityDocumentStatus = 'verified';
+              }
+            });
+            adminDataService.saveProviders(list);
+            loadData();
+            setConfirmState((prev) => ({ ...prev, isOpen: false }));
+            toast({ title: 'Batch Verification', description: `${selected.length} providers verified.` });
+          },
+        });
+      },
+    },
+    {
+      label: 'Suspend Selected',
+      icon: Ban,
+      variant: 'destructive',
+      action: (selected) => {
+        setConfirmState({
+          isOpen: true,
+          title: `Suspend ${selected.length} Providers`,
+          description: `Suspend listings and service availability for ${selected.length} providers?`,
+          variant: 'danger',
+          action: () => {
+            selected.forEach((p) => adminDataService.updateProviderStatus(p.id, 'suspended'));
+            loadData();
+            setConfirmState((prev) => ({ ...prev, isOpen: false }));
+            toast({ title: 'Batch Suspension', description: `${selected.length} providers suspended.` });
+          },
+        });
+      },
+    },
+  ];
+
+  const columns: ColumnDef<AdminProvider>[] = [
+    {
+      header: 'Provider / Trade',
+      accessorKey: 'providerName',
+      cell: (p) => (
+        <div className="space-y-0.5">
+          <div className="font-semibold text-foreground flex items-center gap-1.5">
+            {p.providerName}
+            {p.isVerified && <span title="Verified Badge"><ShieldCheck className="h-4 w-4 text-primary shrink-0" /></span>}
+            {p.isFeatured && <span title="Featured"><Award className="h-3.5 w-3.5 text-amber-500 shrink-0" /></span>}
+          </div>
+          <div className="text-xs text-muted-foreground">{p.specialty}</div>
+        </div>
+      ),
+    },
+    {
+      header: 'Owner / Contact',
+      accessorKey: 'ownerName',
+      cell: (p) => (
+        <div className="space-y-0.5 text-xs">
+          <div className="font-medium text-foreground">{p.ownerName}</div>
+          <div className="text-muted-foreground font-mono">{p.phone}</div>
+        </div>
+      ),
+    },
+    {
+      header: 'Category & Wilaya',
+      accessorKey: 'category',
+      cell: (p) => (
+        <div className="space-y-0.5 text-xs">
+          <Badge variant="outline" className="bg-muted/40 font-normal">
+            {p.category}
+          </Badge>
+          <div className="text-muted-foreground">{p.wilaya}</div>
+        </div>
+      ),
+    },
+    {
+      header: 'Rating / Jobs',
+      accessorKey: 'rating',
+      cell: (p) => (
+        <div className="text-xs">
+          <div className="flex items-center gap-1 font-bold text-foreground">
+            <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+            {p.rating.toFixed(1)}
+            <span className="text-muted-foreground font-normal">({p.reviewCount})</span>
+          </div>
+          <div className="text-muted-foreground text-[11px]">{p.completedJobs} jobs done</div>
+        </div>
+      ),
+    },
+    {
+      header: 'Documents',
+      accessorKey: 'identityDocumentStatus',
+      cell: (p) => {
+        const docStyles: Record<string, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
+          verified: { label: 'Verified CNI/RC', variant: 'default' },
+          pending: { label: 'Under Review', variant: 'secondary' },
+          rejected: { label: 'Rejected', variant: 'destructive' },
+          not_submitted: { label: 'Missing', variant: 'outline' },
+        };
+        const conf = docStyles[p.identityDocumentStatus] || { label: p.identityDocumentStatus, variant: 'outline' };
+        return <Badge variant={conf.variant} className="text-[11px]">{conf.label}</Badge>;
+      },
+    },
+    {
+      header: 'Status',
+      accessorKey: 'status',
+      cell: (p) => {
+        const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+          active: 'default',
+          pending_review: 'secondary',
+          suspended: 'destructive',
+          rejected: 'destructive',
+        };
+        return (
+          <Badge variant={variants[p.status] || 'outline'} className="capitalize text-xs">
+            {p.status.replace('_', ' ')}
+          </Badge>
+        );
+      },
+    },
+    {
+      header: 'Actions',
+      cell: (p) => (
+        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 px-2 text-xs"
+            onClick={() => {
+              setSelectedProvider(p);
+              setIsDetailOpen(true);
+            }}
+          >
+            <Eye className="h-3.5 w-3.5 mr-1" /> View
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-8 px-2 text-xs text-primary"
+            onClick={() => handleToggleVerified(p.id)}
+            title="Toggle Verification Badge"
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      ),
+    },
+  ];
+
+  const total = providers.length;
+  const active = providers.filter((p) => p.status === 'active').length;
+  const verified = providers.filter((p) => p.isVerified).length;
+  const pendingReview = providers.filter((p) => p.status === 'pending_review').length;
 
   return (
     <div className="space-y-6">
-      <header>
-        <h1 className="text-3xl font-bold font-headline flex items-center">
-          <Briefcase className="mr-3 h-8 w-8 text-primary" /> Service Provider Management
+      {/* Top Header */}
+      <div>
+        <h1 className="text-3xl font-bold font-headline flex items-center tracking-tight">
+          <Briefcase className="mr-3 h-8 w-8 text-primary" /> Service Providers & Craftsmen
         </h1>
-        <p className="text-muted-foreground">Manage service provider accounts, their status, and service offerings.</p>
-      </header>
-      
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card>
+        <p className="text-muted-foreground text-sm">
+          Oversee professional service accounts, credentials verification, ratings, and commission assignments.
+        </p>
+      </div>
+
+      {/* KPI Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Card className="bg-card shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Providers</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Total Providers</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{serviceProviders.length}</div>
+            <div className="text-2xl font-bold text-foreground">{total}</div>
+            <p className="text-xs text-muted-foreground mt-1">Artisans & Professionals</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="bg-card shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Active Providers</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Active & Bookable</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{serviceProviders.filter(p => p.status === 'active').length}</div>
+            <div className="text-2xl font-bold text-emerald-600">{active}</div>
+            <p className="text-xs text-muted-foreground mt-1">Receiving appointments</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="bg-card shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Pending Approval</CardTitle>
-            <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Verified Badge</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{serviceProviders.filter(p => p.status === 'pending_review').length}</div>
+            <div className="text-2xl font-bold text-primary">{verified}</div>
+            <p className="text-xs text-muted-foreground mt-1">Identity & Trade Approved</p>
           </CardContent>
         </Card>
-         <Card>
+        <Card className="bg-card shadow-sm">
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Suspended Accounts</CardTitle>
-             <ShieldAlert className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-xs font-semibold uppercase text-muted-foreground">Pending Review</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{serviceProviders.filter(p => p.status === 'suspended').length}</div>
+            <div className="text-2xl font-bold text-amber-600">{pendingReview}</div>
+            <p className="text-xs text-muted-foreground mt-1">Require document audit</p>
           </CardContent>
         </Card>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>All Service Providers</CardTitle>
-          <CardDescription>View, manage status, and access details for all registered service professionals. Table includes avg rating and orders (conceptual).</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-col sm:flex-row gap-2 mb-4">
-            <div className="relative flex-1">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                    type="search"
-                    placeholder="Search by provider name or email..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-8 w-full"
-                />
-            </div>
-             <Select value={filterCategory} onValueChange={setFilterCategory}>
-                <SelectTrigger className="w-full sm:w-[200px]">
-                    <ListFilter className="mr-2 h-4 w-4 text-muted-foreground" />
-                    <SelectValue placeholder="Filter by Category" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">All Categories</SelectItem>
-                    {professionalCategories.map(cat => <SelectItem key={cat.slug} value={cat.name}>{cat.name}</SelectItem>)}
-                </SelectContent>
-            </Select>
-            <Select value={filterStatus} onValueChange={(value) => setFilterStatus(value as any)}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                    <Filter className="mr-2 h-4 w-4 text-muted-foreground" />
-                    <SelectValue placeholder="Filter by Status" />
-                </SelectTrigger>
-                <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="active">Active</SelectItem>
-                    <SelectItem value="suspended">Suspended</SelectItem>
-                    <SelectItem value="pending_review">Pending Review</SelectItem>
-                    <SelectItem value="rejected">Rejected</SelectItem>
-                </SelectContent>
-            </Select>
-          </div>
+      {/* Table */}
+      <AdminDataTable
+        data={providers}
+        columns={columns}
+        searchPlaceholder="Search by provider name, owner, specialty, category, wilaya..."
+        searchKeys={['providerName', 'ownerName', 'specialty', 'category', 'wilaya', 'email', 'phone']}
+        filterOptions={filterOptions}
+        bulkActions={bulkActions}
+        exportFileName="khidmatik_providers"
+        onRowClick={(p) => {
+          setSelectedProvider(p);
+          setIsDetailOpen(true);
+        }}
+        onRefresh={loadData}
+      />
 
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Provider Name</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>City</TableHead>
-                <TableHead className="text-center font-bold">Orders {/* Conceptual */}</TableHead>
-                <TableHead className="text-center">Rating</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredProviders.map((provider) => (
-                <TableRow key={provider.id}>
-                  <TableCell className="font-medium">{provider.providerName}</TableCell>
-                  <TableCell>{provider.serviceCategory}</TableCell>
-                  <TableCell>{provider.location?.city || 'N/A'}</TableCell>
-                  <TableCell className="text-center">{provider.totalOrders || 0} {/* Conceptual */}</TableCell>
-                  <TableCell className="text-center">{provider.averageRating ? `${provider.averageRating.toFixed(1)}/5` : 'N/A'}</TableCell>
-                  <TableCell>
-                    <Badge variant={provider.status === 'active' ? 'default' : provider.status === 'suspended' ? 'destructive' : 'secondary'}
-                           className={`capitalize ${provider.status === 'active' ? 'bg-green-500 text-white' : provider.status === 'pending_review' ? 'bg-yellow-500 text-white' : ''}`}
-                    >
-                      {provider.status.replace('_', ' ')}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                     <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon"><MoreVertical className="h-4 w-4" /></Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => toast({title: "View Provider Details (Conceptual)"})}> <Eye className="mr-2 h-4 w-4"/>View Details</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleViewServices(provider.id, provider.providerName)}> <ListChecks className="mr-2 h-4 w-4"/>View Services</DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => handleToggleStatus(provider.id, provider.status)}>
-                           {provider.status === 'active' ? <ToggleLeft className="mr-2 h-4 w-4"/> : <ToggleRight className="mr-2 h-4 w-4"/>}
-                           {provider.status === 'active' ? 'Suspend' : 'Activate'} Account
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleApproveServices(provider.id, provider.providerName)}> <VerifiedBadgeIcon className="mr-2 h-4 w-4"/>Manually Approve Services</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleAssignBadge(provider.id, 'Verified')}> <VerifiedBadgeIcon className="mr-2 h-4 w-4"/>Assign "Verified" Badge</DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleAssignBadge(provider.id, 'Featured')}> <Star className="mr-2 h-4 w-4"/>Assign "Featured" Badge</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {filteredProviders.length === 0 && <p className="text-center py-4 text-muted-foreground">No service providers match your filters.</p>}
-        </CardContent>
-         <CardFooter className="pt-4">
-            <p className="text-xs text-muted-foreground">
-                Provider management includes activating/suspending accounts based on reviews, compliance, or reports.
-                Badges can enhance visibility. These actions would update the 'service_providers' collection in Firestore.
-            </p>
-        </CardFooter>
-      </Card>
+      {/* Detail Drawer */}
+      {selectedProvider && (
+        <AdminDetailDrawer
+          isOpen={isDetailOpen}
+          onClose={() => setIsDetailOpen(false)}
+          title={selectedProvider.providerName}
+          subtitle={`Provider ID: ${selectedProvider.id} • Joined: ${selectedProvider.joinedDate}`}
+          statusBadge={{
+            label: selectedProvider.status.replace('_', ' '),
+            variant: selectedProvider.status === 'active' ? 'default' : 'destructive',
+          }}
+          metrics={[
+            { label: 'Rating', value: `${selectedProvider.rating.toFixed(1)} ★`, subtext: `${selectedProvider.reviewCount} reviews`, icon: Star },
+            { label: 'Completed Jobs', value: selectedProvider.completedJobs, icon: Briefcase },
+            { label: 'Platform Balance', value: `${selectedProvider.balance.toLocaleString()} DA`, icon: Wallet },
+            { label: 'Commission Rate', value: `${selectedProvider.commissionRate}%`, icon: FileText },
+          ]}
+          fields={[
+            { label: 'Owner / Contact Name', value: selectedProvider.ownerName, icon: Users },
+            { label: 'Phone Number', value: selectedProvider.phone, icon: Phone },
+            { label: 'Email Address', value: selectedProvider.email, icon: Mail },
+            { label: 'Operating Wilaya', value: selectedProvider.wilaya, icon: MapPin },
+            { label: 'Trade Category', value: selectedProvider.category },
+            { label: 'Specialty / Services', value: selectedProvider.specialty, fullWidth: true },
+            { label: 'Identity Document Type', value: selectedProvider.identityDocumentType || 'Not specified' },
+            { label: 'Document Status', value: selectedProvider.identityDocumentStatus.toUpperCase() },
+          ]}
+          activityHistory={[
+            {
+              timestamp: `${selectedProvider.joinedDate} 09:30`,
+              actor: 'System',
+              action: 'Provider Onboarding',
+              details: 'Submitted identity documents for verification.',
+            },
+          ]}
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleToggleVerified(selectedProvider.id)}
+              >
+                <ShieldCheck className="h-4 w-4 mr-1.5 text-primary" />
+                {selectedProvider.isVerified ? 'Revoke Verified Badge' : 'Grant Verified Badge'}
+              </Button>
+              {selectedProvider.status === 'active' ? (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => handleStatusChange(selectedProvider.id, 'suspended')}
+                >
+                  <Ban className="h-4 w-4 mr-1.5" /> Suspend Provider
+                </Button>
+              ) : (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => handleStatusChange(selectedProvider.id, 'active')}
+                >
+                  <CheckCircle2 className="h-4 w-4 mr-1.5" /> Approve & Activate
+                </Button>
+              )}
+            </div>
+          }
+        />
+      )}
+
+      {/* Confirmation Modal */}
+      <AdminConfirmModal
+        isOpen={confirmState.isOpen}
+        onClose={() => setConfirmState((prev) => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmState.action}
+        title={confirmState.title}
+        description={confirmState.description}
+        variant={confirmState.variant}
+      />
     </div>
   );
 }

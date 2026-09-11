@@ -1,4 +1,6 @@
 
+@import 'leaflet/dist/leaflet.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -82,10 +84,27 @@ body {
   * {
     @apply border-border;
   }
+  html, body {
+    max-width: 100vw;
+    overflow-x: clip;
+  }
   body {
     @apply bg-background text-foreground transition-colors duration-300;
+    -webkit-tap-highlight-color: transparent;
   }
   
+  /* Prevent iOS Safari from zooming into form fields on mobile */
+  @media (max-width: 768px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+
+  /* Safe Area Inset Utility for modern phones with bottom home bar */
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom, 1rem);
+  }
+
   /* Apply Cairo font for Arabic language */
   html[lang="ar"] body,
   html[lang="ar"] .font-body,
@@ -142,3 +161,127 @@ body {
 .custom-sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.4);
 }
+
+/* Modern Leaflet Map Styling */
+.leaflet-container {
+  font-family: inherit !important;
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 1 !important;
+  background: #f1f5f9 !important;
+}
+
+.dark .leaflet-container {
+  background: #0f172a !important;
+}
+
+/* Hide default leaflet attribution / controls clunky borders */
+.leaflet-control-attribution {
+  display: none !important;
+}
+
+/* Custom Leaflet Popup */
+.custom-leaflet-popup .leaflet-popup-content-wrapper {
+  background: hsl(var(--card)) !important;
+  color: hsl(var(--card-foreground)) !important;
+  border-radius: 1rem !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.15), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
+  border: 1px solid hsl(var(--border)) !important;
+}
+
+.custom-leaflet-popup .leaflet-popup-content {
+  margin: 0 !important;
+  line-height: inherit !important;
+}
+
+.custom-leaflet-popup .leaflet-popup-tip {
+  background: hsl(var(--card)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  box-shadow: none !important;
+}
+
+.custom-leaflet-popup a.leaflet-popup-close-button {
+  top: 8px !important;
+  right: 8px !important;
+  color: #fff !important;
+  background: rgba(0, 0, 0, 0.5) !important;
+  backdrop-filter: blur(4px) !important;
+  width: 24px !important;
+  height: 24px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+  z-index: 20 !important;
+  transition: all 0.2s ease !important;
+}
+
+.custom-leaflet-popup a.leaflet-popup-close-button:hover {
+  background: rgba(0, 0, 0, 0.8) !important;
+  transform: scale(1.1) !important;
+}
+
+/* Marker pulse animations */
+@keyframes map-pulse-beacon {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 16px rgba(239, 68, 68, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.map-marker-pulse {
+  animation: map-pulse-beacon 2s infinite;
+}
+
+/* Cluster Bubble Styling */
+.khidmatik-cluster-marker {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.cluster-bubble {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, hsl(var(--primary)), #e11d48);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 13px;
+  border: 3px solid #ffffff;
+  box-shadow: 0 10px 25px -3px rgba(239, 68, 68, 0.4), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+}
+
+.cluster-bubble:hover {
+  transform: scale(1.15);
+  box-shadow: 0 15px 30px -3px rgba(239, 68, 68, 0.6);
+}
+
+.cluster-bubble::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 9999px;
+  background: rgba(239, 68, 68, 0.25);
+  z-index: -1;
+  animation: map-pulse-beacon 2.5s infinite;
+}
+
+

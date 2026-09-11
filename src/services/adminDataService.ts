@@ -1,5 +1,7 @@
 'use client';
 
+import { supabase } from '@/lib/supabase';
+
 /**
  * Khidmatik Platform Administration Data Service
  * Centralized state management, initial data fixtures, local persistence,
@@ -577,6 +579,321 @@ class AdminDataService {
     }
   }
 
+  private async execDb(action: () => PromiseLike<any>): Promise<void> {
+    try {
+      await action();
+    } catch (e) {
+      // Non-blocking database background sync
+    }
+  }
+
+  // ==============================================================================
+  // ASYNCHRONOUS SUPABASE LIVE DATABASE INTEGRATION
+  // ==============================================================================
+
+  public async fetchUsersFromDb(): Promise<AdminUser[]> {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .order('member_since', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: AdminUser[] = data.map((p: any) => ({
+          id: p.id,
+          userName: p.name || 'User',
+          email: p.email || '',
+          phone: p.phone || '',
+          role: (p.role?.toLowerCase() as AdminUser['role']) || 'customer',
+          status: p.is_verified ? 'active' : 'pending_verification',
+          wilaya: 'Algiers (16)',
+          city: 'Alger Centre',
+          registrationDate: p.member_since ? p.member_since.split('T')[0] : '2026-08-01',
+          lastLogin: p.updated_at ? p.updated_at.split('T')[0] : '2026-08-20',
+          avatarUrl: p.avatar_url,
+          ordersCount: 0,
+          totalSpent: p.wallet_balance ? parseFloat(p.wallet_balance) : 0,
+          verifiedEmail: true,
+          verifiedPhone: Boolean(p.phone),
+          twoFactorEnabled: false,
+        }));
+        this.saveUsers(mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Error fetching profiles from Supabase, using cache:', e);
+    }
+    return this.getUsers();
+  }
+
+  public async fetchStoresFromDb(): Promise<AdminStore[]> {
+    try {
+      const { data, error } = await supabase
+        .from('stores')
+        .select(`
+          *,
+          owner:profiles(name, email, phone)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: AdminStore[] = data.map((s: any) => ({
+          id: s.id,
+          storeName: s.name,
+          slug: s.slug || s.name.toLowerCase().replace(/\s+/g, '-'),
+          ownerName: s.owner?.name || 'Owner',
+          ownerEmail: s.owner?.email || s.email || '',
+          ownerPhone: s.owner?.phone || s.phone || '',
+          category: s.category || 'General',
+          wilaya: s.wilaya || 'Algiers',
+          address: s.address || '',
+          subscriptionPlan: (s.subscription_plan as AdminStore['subscriptionPlan']) || 'basic',
+          subscriptionStatus: 'active',
+          status: s.is_active ? 'active' : 'suspended',
+          isFeatured: false,
+          isVerified: s.is_verified ?? false,
+          totalSalesCount: 0,
+          totalRevenue: 0,
+          productCount: 0,
+          rating: 4.8,
+          joinedDate: s.created_at ? s.created_at.split('T')[0] : '2026-08-01',
+          commissionRate: 8,
+        }));
+        this.saveStores(mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Error fetching stores from Supabase, using cache:', e);
+    }
+    return this.getStores();
+  }
+
+  public async fetchProductsFromDb(): Promise<AdminProduct[]> {
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select(`
+          *,
+          store:stores(name)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: AdminProduct[] = data.map((p: any) => ({
+          id: p.id,
+          sku: `SKU-${p.id.substring(0, 8).toUpperCase()}`,
+          name: p.name,
+          slug: p.name.toLowerCase().replace(/\s+/g, '-'),
+          storeId: p.store_id,
+          storeName: p.store?.name || 'Partner Store',
+          category: p.category || 'General',
+          price: parseFloat(p.price_da) || 0,
+          stock: p.stock_quantity ?? 0,
+          status: p.is_active ? (p.stock_quantity > 0 ? 'active' : 'out_of_stock') : 'draft',
+          isMadeInAlgeria: true,
+          salesCount: 0,
+          rating: 4.8,
+          reviewCount: 0,
+          imageUrl: Array.isArray(p.images) && p.images[0] ? p.images[0] : 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=300',
+          createdDate: p.created_at ? p.created_at.split('T')[0] : '2026-08-10',
+          description: p.description || p.name,
+        }));
+        this.saveProducts(mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Error fetching products from Supabase, using cache:', e);
+    }
+    return this.getProducts();
+  }
+
+  public async fetchOrdersFromDb(): Promise<AdminOrder[]> {
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select(`
+          *,
+          customer:profiles(name, email, phone),
+          store:stores(name),
+          order_items(*)
+        `)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: AdminOrder[] = data.map((o: any) => {
+          const rawStatus = (o.status || 'PENDING').toLowerCase();
+          const mappedFulfillment: AdminOrder['fulfillmentStatus'] =
+            rawStatus === 'shipped' ? 'shipped' :
+            rawStatus === 'delivered' ? 'delivered' :
+            rawStatus === 'cancelled' ? 'cancelled' : 'processing';
+
+          const itemsArr = Array.isArray(o.order_items) ? o.order_items : [];
+          const summary = itemsArr.length > 0 
+            ? itemsArr.map((it: any) => `${it.product_name} (x${it.quantity})`).join(', ')
+            : 'Order items';
+
+          return {
+            id: o.id,
+            orderNumber: o.id.startsWith('KHM') ? o.id : `KHM-${o.id.substring(0, 8).toUpperCase()}`,
+            customerId: o.customer_id || 'usr_1',
+            customerName: o.customer?.name || 'Customer',
+            customerEmail: o.customer?.email || 'customer@khidmatik.dz',
+            customerPhone: o.customer?.phone || '',
+            storeId: o.store_id,
+            storeName: o.store?.name || 'Store',
+            itemsCount: itemsArr.length || 1,
+            itemsSummary: summary,
+            totalAmount: parseFloat(o.total_amount_da) || 0,
+            shippingFee: 800,
+            discountAmount: 0,
+            paymentStatus: rawStatus === 'cancelled' ? 'refunded' : 'paid',
+            paymentMethod: 'edahabia',
+            fulfillmentStatus: mappedFulfillment,
+            wilaya: o.shipping_wilaya || 'Algiers (16)',
+            deliveryAddress: o.shipping_address || 'Alger Centre',
+            courier: 'yalidine',
+            trackingNumber: o.tracking_number || `YAL-${o.id.substring(0, 6)}`,
+            orderDate: o.created_at ? o.created_at.replace('T', ' ').substring(0, 19) : '2026-08-20 10:00',
+          };
+        });
+        this.saveOrders(mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Error fetching orders from Supabase, using cache:', e);
+    }
+    return this.getOrders();
+  }
+
+  public async fetchBookingsFromDb(): Promise<AdminBooking[]> {
+    try {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select(`
+          *,
+          customer:profiles!appointments_customer_id_fkey(name, phone, email),
+          provider:profiles!appointments_provider_id_fkey(name, phone)
+        `)
+        .order('date', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: AdminBooking[] = data.map((b: any) => ({
+          id: b.id,
+          bookingCode: `RES-${b.id.substring(0, 6).toUpperCase()}`,
+          customerName: b.patient_name || b.customer?.name || 'Client',
+          customerPhone: b.customer?.phone || '',
+          customerEmail: b.customer?.email || 'client@khidmatik.dz',
+          providerOrVenueName: b.provider?.name || 'Professional Provider',
+          type: 'service',
+          category: 'Service',
+          scheduledDate: b.date,
+          timeSlot: b.time_slot || '10:00 - 11:00',
+          totalPrice: 3500,
+          depositPaid: 1000,
+          status: b.status || 'confirmed',
+          wilaya: 'Algiers (16)',
+          address: b.notes || 'On-Site / Cabinet',
+          createdAt: b.created_at ? b.created_at.split('T')[0] : '2026-08-15',
+        }));
+        this.saveBookings(mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Error fetching bookings from Supabase, using cache:', e);
+    }
+    return this.getBookings();
+  }
+
+  public async fetchCategoriesFromDb(): Promise<AdminCategory[]> {
+    try {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .order('name', { ascending: true });
+
+      if (!error && data && data.length > 0) {
+        const mapped: AdminCategory[] = data.map((c: any, index: number) => ({
+          id: c.id,
+          name: c.name,
+          nameAr: c.name,
+          nameFr: c.name,
+          slug: c.slug,
+          iconName: c.icon_name || 'ShoppingBag',
+          type: (c.type as AdminCategory['type']) || 'store',
+          itemCount: 50,
+          displayOrder: index + 1,
+          isActive: true,
+          isFeatured: index < 6,
+        }));
+        this.saveCategories(mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Error fetching categories from Supabase, using cache:', e);
+    }
+    return this.getCategories();
+  }
+
+  public async fetchReviewsFromDb(): Promise<AdminReview[]> {
+    try {
+      const { data, error } = await supabase
+        .from('reviews')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: AdminReview[] = data.map((r: any) => ({
+          id: r.id,
+          targetType: 'store',
+          targetId: r.store_id || 'store',
+          targetName: 'Khidmatik Merchant',
+          authorName: r.author_name || 'Customer',
+          authorEmail: 'customer@khidmatik.dz',
+          rating: r.rating || 5,
+          comment: r.comment || '',
+          sentiment: (r.rating || 5) >= 4 ? 'positive' : (r.rating === 3 ? 'neutral' : 'negative'),
+          status: 'approved',
+          createdAt: r.created_at ? r.created_at.replace('T', ' ').substring(0, 16) : '2026-08-20 12:00',
+        }));
+        this.saveReviews(mapped);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Error fetching reviews from Supabase, using cache:', e);
+    }
+    return this.getReviews();
+  }
+
+  public async fetchPlatformOverviewStats() {
+    try {
+      const [
+        { count: userCount },
+        { count: storeCount },
+        { count: productCount },
+        { count: orderCount },
+      ] = await Promise.all([
+        supabase.from('profiles').select('*', { count: 'exact', head: true }),
+        supabase.from('stores').select('*', { count: 'exact', head: true }),
+        supabase.from('products').select('*', { count: 'exact', head: true }),
+        supabase.from('orders').select('*', { count: 'exact', head: true }),
+      ]);
+
+      return {
+        totalUsers: userCount || this.getUsers().length,
+        totalStores: storeCount || this.getStores().length,
+        totalProducts: productCount || this.getProducts().length,
+        totalOrders: orderCount || this.getOrders().length,
+      };
+    } catch (e) {
+      return {
+        totalUsers: this.getUsers().length,
+        totalStores: this.getStores().length,
+        totalProducts: this.getProducts().length,
+        totalOrders: this.getOrders().length,
+      };
+    }
+  }
+
   // Activity Log helper
   public recordAudit(actor: string, actionType: AdminAuditLog['actionType'], entityType: string, entityId: string, description: string, oldValue?: any, newValue?: any) {
     const logs = this.getAuditLogs();
@@ -595,6 +912,18 @@ class AdminDataService {
       newValue
     };
     this.setStorage('audit_logs', [newLog, ...logs]);
+
+    // Asynchronously log to Supabase admin_audit_logs table
+    this.execDb(() =>
+      supabase.from('admin_audit_logs').insert({
+        action: actionType,
+        entity_type: entityType,
+        entity_id: entityId,
+        metadata: { description, actor },
+        previous_state: oldValue || {},
+        new_state: newValue || {},
+      })
+    );
   }
 
   // 1. Users
@@ -608,6 +937,9 @@ class AdminDataService {
     target.status = status;
     this.saveUsers(users);
     this.recordAudit(actor, 'UPDATE', 'User', id, `Updated user ${target.userName} status to ${status}`, { status: oldStatus }, { status });
+
+    // Sync to Supabase
+    this.execDb(() => supabase.from('profiles').update({ is_verified: status === 'active' }).eq('id', id));
   }
 
   // 2. Providers
@@ -634,6 +966,9 @@ class AdminDataService {
     target.status = status;
     this.saveStores(list);
     this.recordAudit(actor, 'UPDATE', 'Store', id, `Changed store ${target.storeName} status to ${status}`, { status: old }, { status });
+
+    // Sync to Supabase
+    this.execDb(() => supabase.from('stores').update({ is_active: status === 'active' }).eq('id', id));
   }
 
   // 4. Products
@@ -647,6 +982,9 @@ class AdminDataService {
     target.status = status;
     this.saveProducts(list);
     this.recordAudit(actor, 'UPDATE', 'Product', id, `Updated product ${target.name} status to ${status}`, { status: old }, { status });
+
+    // Sync to Supabase
+    this.execDb(() => supabase.from('products').update({ is_active: status === 'active' }).eq('id', id));
   }
 
   // 5. Services
@@ -673,6 +1011,9 @@ class AdminDataService {
     target.fulfillmentStatus = fulfillmentStatus;
     this.saveOrders(list);
     this.recordAudit(actor, 'UPDATE', 'Order', id, `Updated order ${target.orderNumber} fulfillment to ${fulfillmentStatus}`, { status: old }, { status: fulfillmentStatus });
+
+    // Sync to Supabase
+    this.execDb(() => supabase.from('orders').update({ status: fulfillmentStatus.toUpperCase() }).eq('id', id));
   }
 
   // 7. Bookings
@@ -686,6 +1027,9 @@ class AdminDataService {
     target.status = status;
     this.saveBookings(list);
     this.recordAudit(actor, 'UPDATE', 'Booking', id, `Updated booking ${target.bookingCode} status to ${status}`, { status: old }, { status });
+
+    // Sync to Supabase
+    this.execDb(() => supabase.from('appointments').update({ status }).eq('id', id));
   }
 
   // 8. Payments

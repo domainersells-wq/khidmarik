@@ -10,7 +10,8 @@ import { useToast } from "@/hooks/use-toast";
 import {
   CreditCard, Landmark, FileText, PackageCheck, AlertCircle,
   CheckCircle, ArrowRight, ArrowLeft, Wallet, Copy, ShieldCheck,
-  BadgeCheck, Clock, CircleDollarSign, AlertTriangle, UserCheck
+  BadgeCheck, Clock, CircleDollarSign, AlertTriangle, UserCheck,
+  Paperclip, Upload, Image as ImageIcon, X
 } from 'lucide-react';
 import { financialService } from '@/services/financialService';
 import { TopUpRequest, TopUpMethod } from '@/types/financials';
@@ -42,9 +43,30 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
   const [senderName, setSenderName] = useState(authUser?.name || '');
   const [senderAccount, setSenderAccount] = useState('');
   const [transferDate, setTransferDate] = useState(new Date().toISOString().split('T')[0]);
+  const [receiptUrl, setReceiptUrl] = useState('');
+  const [receiptFileName, setReceiptFileName] = useState('');
   const [userNotes, setUserNotes] = useState('');
   const [copied, setCopied] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleReceiptFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      toast({
+        title: "حجم الملف كبير جداً",
+        description: "يرجى اختيار مستند أو صورة بحجم أقل من 10 ميغابايت.",
+        variant: "destructive"
+      });
+      return;
+    }
+    setReceiptFileName(file.name);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setReceiptUrl(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const currentStepIndex = STEPS.indexOf(step);
 
@@ -95,6 +117,7 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
         senderName: senderName.trim() || authUser?.name || 'Client',
         senderAccount: senderAccount.trim(),
         transferDate,
+        receiptUrl: receiptUrl.trim() || undefined,
         userNotes: userNotes.trim(),
       });
 
@@ -410,6 +433,48 @@ export function TopUpDialog({ currentBalance, onClose, onTopUpSuccess }: TopUpDi
                 className="h-9 text-xs font-mono rounded-xl bg-background"
                 dir="ltr"
               />
+            </div>
+
+            {/* Receipt Upload Field */}
+            <div className="space-y-1.5 p-3 rounded-xl border border-dashed border-primary/40 bg-primary/5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="topup-receipt-file" className="text-xs font-bold text-foreground flex items-center gap-1.5 cursor-pointer">
+                  <Paperclip className="h-3.5 w-3.5 text-primary" />
+                  <span>إرفاق صورة الوصل أو مستند التحويل (مستحسن للتحقق السريع)</span>
+                </Label>
+                {receiptFileName && (
+                  <button
+                    type="button"
+                    onClick={() => { setReceiptUrl(''); setReceiptFileName(''); }}
+                    className="text-[10px] text-destructive hover:underline flex items-center gap-0.5"
+                  >
+                    <X className="h-3 w-3" /> حذف الوصل
+                  </button>
+                )}
+              </div>
+
+              {receiptFileName ? (
+                <div className="flex items-center gap-2 p-2 bg-background rounded-lg border text-xs">
+                  <FileText className="h-4 w-4 text-primary shrink-0" />
+                  <span className="font-mono text-[11px] text-foreground font-bold truncate flex-1">{receiptFileName}</span>
+                  <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-600 border-emerald-500/30">جاهز للإرسال</Badge>
+                </div>
+              ) : (
+                <label
+                  htmlFor="topup-receipt-file"
+                  className="flex items-center justify-center gap-2 p-3 bg-background/80 hover:bg-background rounded-lg border border-border cursor-pointer transition-colors text-center"
+                >
+                  <Upload className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground font-medium">اضغط لاختيار صورة الوصل (JPG, PNG, WebP) أو ملف PDF</span>
+                  <input
+                    id="topup-receipt-file"
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={handleReceiptFileChange}
+                    className="hidden"
+                  />
+                </label>
+              )}
             </div>
 
             {/* Under Review Notice */}

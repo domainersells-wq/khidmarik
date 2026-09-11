@@ -35,8 +35,16 @@ export function StoreManagementSection() {
     variant: 'warning',
   });
 
-  const loadData = () => {
+  const loadData = async () => {
     setStores(adminDataService.getStores());
+    try {
+      const dbStores = await adminDataService.fetchStoresFromDb();
+      if (dbStores && dbStores.length > 0) {
+        setStores(dbStores);
+      }
+    } catch (e) {
+      console.warn('Error loading stores from DB:', e);
+    }
   };
 
   useEffect(() => {

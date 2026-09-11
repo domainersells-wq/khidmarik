@@ -1660,9 +1660,22 @@ class FinancialService {
       return { success: false, error: 'طلب الشحن غير موجود' };
     }
 
-    // Idempotency: Reject already approved requests to prevent duplicate balance credit
+    // Idempotency: Reject already approved requests or already credited entries to prevent duplicate balance credit
     if (request.status === 'APPROVED') {
       return { success: false, error: 'تم اعتماد هذا الطلب مسبقاً ولا يمكن تكرار إيداع الرصيد' };
+    }
+
+    const walletLedgerList = this.getStore<any>('khidmatik_fin_wallet_ledger', []);
+    const alreadyCreditedInLedger = walletLedgerList.some(
+      (entry) =>
+        (entry.referenceId === request.publicRequestNumber || entry.topUpRequestId === request.id) &&
+        entry.type === 'TOPUP_CREDIT' &&
+        entry.status === 'COMPLETED'
+    );
+    if (alreadyCreditedInLedger) {
+      request.status = 'APPROVED';
+      this.saveStore(this.TOPUPS_KEY, list);
+      return { success: false, error: 'تم إيداع رصيد هذا الطلب مسبقاً في الدفتر المالي للمحفظة' };
     }
 
     const normUserId = this.normalizeUserId(request.userId);
@@ -1714,7 +1727,6 @@ class FinancialService {
     this.saveStore(this.WALLETS_KEY, wallets);
 
     // Save Dedicated Wallet Ledger Record
-    const walletLedgerList = this.getStore<any>('khidmatik_fin_wallet_ledger', []);
     walletLedgerList.unshift({
       id: `wled_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
       walletId: wallet.sellerId,
@@ -2200,6 +2212,23 @@ class FinancialService {
     let wallet = wallets.find((w) => this.normalizeUserId(w.sellerId) === normId);
     const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
+    // Strict Idempotency Check: Prevent duplicate credit if referenceId was already processed
+    const walletLedgerList = this.getStore<any>('khidmatik_fin_wallet_ledger', []);
+    if (referenceId) {
+      const cleanRef = referenceId.trim();
+      const alreadyCredited = walletLedgerList.some(
+        (entry) =>
+          this.normalizeUserId(entry.userId) === normId &&
+          (entry.referenceId === cleanRef || entry.topUpRequestId === cleanRef || entry.idempotencyKey === `idemp_${cleanRef}`) &&
+          entry.type === 'TOPUP_CREDIT' &&
+          entry.status === 'COMPLETED'
+      );
+      if (alreadyCredited && wallet) {
+        // Return existing wallet state immediately without re-crediting
+        return wallet;
+      }
+    }
+
     if (!wallet) {
       wallet = {
         sellerId: normId,
@@ -2227,6 +2256,27 @@ class FinancialService {
     }
 
     this.saveStore(this.WALLETS_KEY, wallets);
+
+    // Record wallet ledger entry to seal idempotency
+    if (referenceId) {
+      walletLedgerList.unshift({
+        id: `wled_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+        walletId: wallet.sellerId,
+        userId: normId,
+        referenceId,
+        amount,
+        currency: 'DZD',
+        type: 'TOPUP_CREDIT',
+        status: 'COMPLETED',
+        balanceBefore: wallet.availableBalance - amount,
+        balanceAfter: wallet.availableBalance,
+        idempotencyKey: `idemp_${referenceId}`,
+        operator: 'System Financial Engine',
+        createdAt: nowStr,
+        notes: 'Top-up wallet credit',
+      });
+      this.saveStore('khidmatik_fin_wallet_ledger', walletLedgerList);
+    }
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(

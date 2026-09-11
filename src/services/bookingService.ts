@@ -58,6 +58,20 @@ export const bookingService = {
     reasonForVisit: string;
     notes?: string;
   }): Promise<any> {
+    // 1. Prevent duplicate booking for the same provider at the same date and slot
+    const { data: existingBooking } = await supabase
+      .from('appointments')
+      .select('id, status')
+      .eq('provider_id', appointment.providerId)
+      .eq('date', appointment.date)
+      .eq('time_slot', appointment.timeSlot)
+      .neq('status', 'cancelled')
+      .maybeSingle();
+
+    if (existingBooking) {
+      throw new Error('هذا الموعد محجوز مسبقاً لدى مقدم الخدمة. يرجى اختيار موعد أو فترة زمنية أخرى.');
+    }
+
     const { data, error } = await supabase
       .from('appointments')
       .insert({

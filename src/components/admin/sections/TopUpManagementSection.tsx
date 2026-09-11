@@ -1068,6 +1068,24 @@ export function TopUpManagementSection() {
                 </div>
               )}
 
+              {/* Admin Approval Notes Input */}
+              {(selectedRequest.status === 'UNDER_REVIEW' || selectedRequest.status === 'INFO_REQUIRED') && (
+                <div className="p-3.5 rounded-2xl bg-emerald-500/5 border border-emerald-500/20 space-y-1.5 text-xs">
+                  <Label htmlFor="admin-approval-notes" className="font-bold text-foreground flex items-center gap-1.5">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    <span>ملاحظات التدقيق الإداري والاعتماد (اختياري - تُسجل في القيد المالي):</span>
+                  </Label>
+                  <Input
+                    id="admin-approval-notes"
+                    type="text"
+                    value={adminApprovalNotes}
+                    onChange={(e) => setAdminApprovalNotes(e.target.value)}
+                    placeholder="مثال: تمت المطابقة بنجاح مع كشف حساب BaridiMob وتأكيد وصول المبلغ..."
+                    className="h-9 text-xs rounded-xl bg-background"
+                  />
+                </div>
+              )}
+
               {/* Review History */}
               {selectedRequest.reviewedBy && (
                 <div className="p-3.5 rounded-2xl bg-muted/40 border space-y-1.5 text-xs">

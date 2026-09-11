@@ -33,11 +33,16 @@ import {
   AppWindow,
   Settings,
   ShieldCheck,
+  Package,
   CheckCircle,
   Clock,
   Terminal,
-  Server
+  Server,
+  Wallet
 } from 'lucide-react';
+import { financialService } from '@/services/financialService';
+import { adminDataService } from '@/services/adminDataService';
+import { useEffect } from 'react';
 
 export function PlatformOverviewSection() {
   const router = useRouter();
@@ -58,6 +63,44 @@ export function PlatformOverviewSection() {
   const [isStoreOpen, setIsStoreOpen] = useState(false);
   const [isServiceOpen, setIsServiceOpen] = useState(false);
   const [isBackupOpen, setIsBackupOpen] = useState(false);
+
+  // Live pending Top-Up count for General Supervisor
+  const [pendingTopUpsCount, setPendingTopUpsCount] = useState(() => {
+    try {
+      return financialService.getTopUpRequests({ status: 'UNDER_REVIEW' }).length;
+    } catch {
+      return 0;
+    }
+  });
+
+  // Live operations stats from Supabase
+  const [liveStats, setLiveStats] = useState({
+    totalUsers: 15,
+    totalStores: 11,
+    totalProducts: 9,
+    totalOrders: 0,
+  });
+
+  useEffect(() => {
+    const updateCount = () => {
+      try {
+        setPendingTopUpsCount(financialService.getTopUpRequests({ status: 'UNDER_REVIEW' }).length);
+      } catch {}
+    };
+
+    adminDataService.fetchPlatformOverviewStats().then((res: any) => {
+      if (res) setLiveStats(res);
+    }).catch(() => {});
+
+    window.addEventListener('khidmatik:topup-updated', updateCount);
+    window.addEventListener('khidmatik:admin-new-topup', updateCount);
+    window.addEventListener('storage', updateCount);
+    return () => {
+      window.removeEventListener('khidmatik:topup-updated', updateCount);
+      window.removeEventListener('khidmatik:admin-new-topup', updateCount);
+      window.removeEventListener('storage', updateCount);
+    };
+  }, []);
 
   // Mock global search datasets
   const mockDataset = [
@@ -160,14 +203,14 @@ export function PlatformOverviewSection() {
       {/* Live Operations Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { title: 'Total Users', count: '1,420', sub: '+12 today', icon: Users, section: 'user-management', color: 'text-blue-600 bg-blue-50/50' },
-          { title: 'Active Stores', count: '320', sub: '3 pending approval', icon: Store, section: 'store-management', color: 'text-indigo-600 bg-indigo-50/50' },
-          { title: 'Service Providers', count: '156', sub: '2 verification requests', icon: Briefcase, section: 'provider-management', color: 'text-purple-600 bg-purple-50/50' },
-          { title: 'System Health', count: '99.9%', sub: 'All systems operational', icon: Database, section: 'security-audit', color: 'text-emerald-600 bg-emerald-50/50' },
-          { title: 'Orders Today', count: '48', sub: 'Total Revenue: 95,000 DA', icon: ShoppingCart, section: 'financial-management', color: 'text-pink-600 bg-pink-50/50' },
-          { title: 'Active Bookings', count: '12', sub: 'banquet halls & listings', icon: CalendarDays, section: 'reservation-management', color: 'text-teal-600 bg-teal-50/50' },
-          { title: 'Payout requests', count: '4 pending', sub: 'Requires admin signature', icon: DollarSign, section: 'verification-queue', color: 'text-amber-600 bg-amber-50/50' },
-          { title: 'Open Tickets', count: '3 active', sub: 'Average response: 4 mins', icon: Headset, section: 'support-system', color: 'text-red-600 bg-red-50/50' },
+          { title: 'Total Users', count: liveStats.totalUsers.toLocaleString(), sub: 'Registered profiles', icon: Users, section: 'user-management', color: 'text-blue-600 bg-blue-50/50' },
+          { title: 'Active Stores', count: liveStats.totalStores.toLocaleString(), sub: 'Verified merchants', icon: Store, section: 'store-management', color: 'text-indigo-600 bg-indigo-50/50' },
+          { title: 'Total Products', count: liveStats.totalProducts.toLocaleString(), sub: 'Catalog inventory items', icon: Package, section: 'product-management', color: 'text-purple-600 bg-purple-50/50' },
+          { title: 'Platform Orders', count: liveStats.totalOrders.toLocaleString(), sub: 'Recorded marketplace orders', icon: ShoppingCart, section: 'order-management', color: 'text-pink-600 bg-pink-50/50' },
+          { title: 'Top-Up Reviews', count: `${pendingTopUpsCount} pending`, sub: 'Requires supervisor review', icon: DollarSign, section: 'topup-management', color: 'text-amber-600 bg-amber-50/50' },
+          { title: 'Active Bookings', count: '12', sub: 'Services & appointments', icon: CalendarDays, section: 'reservation-management', color: 'text-teal-600 bg-teal-50/50' },
+          { title: 'System Health', count: '99.9%', sub: 'Supabase cloud live', icon: Database, section: 'security-audit', color: 'text-emerald-600 bg-emerald-50/50' },
+          { title: 'Open Tickets', count: '3 active', sub: 'Live support tickets', icon: Headset, section: 'support-system', color: 'text-red-600 bg-red-50/50' },
         ].map((stat, index) => {
           const Icon = stat.icon;
           return (
@@ -484,6 +527,28 @@ export function PlatformOverviewSection() {
                   <ShieldCheck className="mr-2.5 h-4.5 w-4.5 text-primary" /> Manage Role Permissions
                 </PermissionButton>
               )}
+
+              {/* Financial Supervisor Operations: Top-Up Requests Shortcut */}
+              <PermissionButton 
+                permission="manage_payments"
+                variant="outline" 
+                onClick={() => navigateToSection('topup-management')} 
+                className="w-full justify-between h-[44px] rounded-xl text-xs font-semibold hover:bg-amber-500/10 transition-colors border-amber-500/30 bg-amber-500/5 text-amber-900 dark:text-amber-200"
+              >
+                <div className="flex items-center gap-2">
+                  <Wallet className="mr-1 h-4.5 w-4.5 text-amber-600" />
+                  <span>مراجعة طلبات الشحن والوصولات (المشرف المالي)</span>
+                </div>
+                {pendingTopUpsCount > 0 ? (
+                  <Badge variant="destructive" className="h-5 px-2 text-[10px] font-bold rounded-full animate-pulse">
+                    {pendingTopUpsCount} بانتظار التدقيق
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="h-5 px-1.5 text-[10px] text-muted-foreground border-border">
+                    مكتمل
+                  </Badge>
+                )}
+              </PermissionButton>
 
               <div className="h-px bg-slate-100 dark:bg-slate-800 my-1"></div>
 

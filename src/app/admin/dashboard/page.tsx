@@ -36,6 +36,7 @@ import { PlatformSecuritySection } from '@/components/admin/sections/PlatformSec
 import { PlatformCMSection } from '@/components/admin/sections/PlatformCMSection';
 import { PlatformAdvancedToolsSection } from '@/components/admin/sections/PlatformAdvancedToolsSection';
 import { AdminShippingDashboardSection } from '@/components/admin/sections/AdminShippingDashboardSection';
+import { SubscriptionManagementSection } from '@/components/admin/sections/SubscriptionManagementSection';
 
 export default function AdminDashboardPage() {
   const searchParams = useSearchParams();
@@ -179,6 +180,14 @@ export default function AdminDashboardPage() {
         );
 
       // 5. Financial Hub
+      case 'subscription-management':
+      case 'subscriptions':
+      case 'subscription-plans':
+        return (
+          <ProtectedComponent requiredPermission="manage_payments" fallback={<UnauthorizedState requiredPermission="manage_payments" />}>
+            <SubscriptionManagementSection />
+          </ProtectedComponent>
+        );
       case 'topup-management':
       case 'topups':
       case 'topup-requests':

@@ -53,8 +53,16 @@ export function UserManagementSection() {
     status: 'active' as AdminUser['status'],
   });
 
-  const loadData = () => {
+  const loadData = async () => {
     setUsers(adminDataService.getUsers());
+    try {
+      const dbUsers = await adminDataService.fetchUsersFromDb();
+      if (dbUsers && dbUsers.length > 0) {
+        setUsers(dbUsers);
+      }
+    } catch (e) {
+      console.warn('Error loading users from DB:', e);
+    }
   };
 
   useEffect(() => {

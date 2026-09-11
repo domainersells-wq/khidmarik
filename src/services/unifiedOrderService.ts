@@ -619,13 +619,112 @@ class UnifiedOrderService {
   }): Promise<UnifiedOrder[]> {
     let orders = this.getStorage();
 
-    // Optionally sync with Supabase
+    // Sync with live Supabase orders table
     try {
+      let dbQuery = supabase
+        .from('orders')
+        .select(`
+          *,
+          customer:profiles(id, name, email, phone),
+          store:stores(id, name, wilaya, phone, email),
+          order_items(*)
+        `)
+        .order('created_at', { ascending: false });
+
       if (params?.sellerId) {
-        const { data } = await supabase.from('orders').select('*').eq('store_id', params.sellerId);
-        if (data && data.length > 0) {
-          // Sync existing Supabase schema records if present
-        }
+        dbQuery = dbQuery.eq('store_id', params.sellerId);
+      }
+      if (params?.customerId) {
+        dbQuery = dbQuery.eq('customer_id', params.customerId);
+      }
+
+      const { data: dbData, error } = await dbQuery;
+      if (!error && dbData && dbData.length > 0) {
+        const liveOrders: UnifiedOrder[] = dbData.map((dbo: any) => {
+          const items: UnifiedOrderItem[] = (dbo.order_items || []).map((it: any) => ({
+            id: it.id,
+            itemId: it.product_id || it.id,
+            name: it.product_name,
+            itemType: 'product',
+            unitPrice: parseFloat(it.unit_price_da) || 0,
+            quantity: it.quantity || 1,
+            lineTotal: parseFloat(it.total_price_da) || ((parseFloat(it.unit_price_da) || 0) * (it.quantity || 1)),
+            commissionRatePercent: 8,
+          }));
+
+          const total = parseFloat(dbo.total_amount_da) || 0;
+          const comm = Math.round(total * 0.08);
+
+          return {
+            id: dbo.id,
+            orderNumber: dbo.id.startsWith('KHD') ? dbo.id : `KHD-${dbo.id}`,
+            source: 'store',
+            status: (dbo.status as UnifiedOrderStatus) || 'PENDING',
+            customer: {
+              id: dbo.customer_id,
+              name: dbo.customer?.name || 'Customer',
+              email: dbo.customer?.email || 'customer@khidmatik.dz',
+              phone: dbo.customer?.phone || '',
+              wilaya: dbo.shipping_wilaya || 'Algiers',
+              city: 'Alger',
+              deliveryAddress: dbo.shipping_address || 'Algiers',
+            },
+            sellerOrProvider: {
+              id: dbo.store_id,
+              name: dbo.store?.name || 'Store Merchant',
+              entityType: 'store',
+              email: dbo.store?.email || '',
+              phone: dbo.store?.phone || '',
+              wilaya: dbo.store?.wilaya || 'Algiers',
+            },
+            items: items.length > 0 ? items : [{
+              id: `item_${dbo.id}_1`,
+              itemId: dbo.id,
+              name: 'Order item',
+              itemType: 'product',
+              unitPrice: total,
+              quantity: 1,
+              lineTotal: total,
+            }],
+            financials: {
+              currency: 'DZD',
+              itemsSubtotal: total,
+              shippingFee: 800,
+              serviceFee: 0,
+              discountAmount: 0,
+              taxAmount: 0,
+              platformCommission: comm,
+              netSellerPayout: total - comm,
+              totalAmount: total,
+              depositPaid: total,
+            },
+            payment: {
+              method: 'edahabia',
+              status: dbo.status === 'CANCELLED' ? 'REFUNDED' : 'PAID',
+              paidAmount: total,
+            },
+            delivery: {
+              courier: 'yalidine',
+              trackingNumber: dbo.tracking_number,
+              deliveryStatus: dbo.status === 'DELIVERED' ? 'DELIVERED' : 'PENDING',
+            },
+            timeline: [
+              {
+                id: `tl_${dbo.id}_1`,
+                timestamp: dbo.created_at || new Date().toISOString(),
+                newStatus: (dbo.status as UnifiedOrderStatus) || 'PENDING',
+                operator: dbo.customer?.name || 'System',
+                operatorRole: 'SYSTEM',
+                actionTitle: 'Order Created',
+              },
+            ],
+            createdAt: dbo.created_at || new Date().toISOString(),
+            updatedAt: dbo.updated_at || new Date().toISOString(),
+          };
+        });
+
+        const liveIds = new Set(liveOrders.map((o) => o.id));
+        orders = [...liveOrders, ...orders.filter((o) => !liveIds.has(o.id))];
       }
     } catch (e) {
       // Supabase offline/fallback mode

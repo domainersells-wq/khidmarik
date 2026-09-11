@@ -1143,22 +1143,23 @@ export default function ProfilePage() {
     setApprovingTransactionId(tx.id);
 
     try {
-      // 1. Unified financialService approval & double-entry ledger credit
+      // 1. Unified single atomic approval in financialService
       const targetReqId = tx.transactionCode || tx.id;
-      financialService.approveTopUpRequest(
+      const approvalResult = financialService.approveTopUpRequest(
         targetReqId,
         'Admin Finance Desk',
-        'تم التحقق من الوصل واعتماد الرصيد فورياً'
-      );
-      
-      // Explicitly credit user wallet in financial engine
-      financialService.creditUserWallet(
-        authUser?.id || 'user_1534d1e7',
-        tx.amount,
-        tx.transactionCode || tx.id
+        'تم التحقق من الوصل واعتماد الرصيد ومطابقة القيد بنجاح'
       );
 
-      // 2. Immediate local reactive state update
+      if (!approvalResult.success && approvalResult.error && !approvalResult.error.includes('مسبقاً')) {
+        throw new Error(approvalResult.error);
+      }
+      
+      // 2. Fetch authoritative user wallet directly from store (single credit guarantee)
+      const targetUserId = authUser?.id || 'user_1534d1e7';
+      const userWallet = financialService.getUserWallet(targetUserId, authUser?.name);
+
+      // 3. Immediate local reactive state update
       const nowStr = new Date().toISOString();
       const pointsEarned = Math.floor(tx.amount / 10);
       setProfileData(prevUser => {
@@ -1168,7 +1169,6 @@ export default function ProfilePage() {
             ? { ...t, status: 'approved' as any, processedAt: nowStr }
             : t
         );
-        const newBalance = prevUser.walletBalance + tx.amount;
         if (authUser?.id) {
           localStorage.setItem('khidmatik_topups_' + authUser.id, JSON.stringify(updatedHistory));
         }
@@ -1177,17 +1177,17 @@ export default function ProfilePage() {
 
         return {
           ...prevUser,
-          walletBalance: newBalance,
+          walletBalance: userWallet.availableBalance,
           loyaltyPoints: (prevUser.loyaltyPoints || 0) + pointsEarned,
           topUpHistory: updatedHistory,
         };
       });
 
-      // 3. Highlight balance card
+      // 4. Highlight balance card
       setBalanceHighlight(true);
       setTimeout(() => setBalanceHighlight(false), 3500);
 
-      // 4. Server API call for persistent server-side ledger sync
+      // 5. Server API call for persistent server-side ledger sync
       try {
         await fetch(`/api/v1/financial/topups/${encodeURIComponent(tx.id || tx.transactionCode)}/approve`, {
           method: 'POST',
@@ -1202,8 +1202,8 @@ export default function ProfilePage() {
       }
 
       toast({
-        title: "✅ تم قبول الوصل وتحديث الرصيد بنجاح!",
-        description: `تم إيداع مبلغ +${tx.amount.toLocaleString()} دج في محفظتك الرقمية وتحديث الرصيد المتاح فورياً.`,
+        title: "✅ تم اعتماد الوصل وتحديث الرصيد بنجاح!",
+        description: `تم إيداع مبلغ +${tx.amount.toLocaleString()} دج في محفظتك الرقمية وتحديث الرصيد المتاح.`,
         duration: 5000,
       });
     } catch (e: any) {
@@ -3713,31 +3713,24 @@ export default function ProfilePage() {
                             </div>
                           )}
 
-                          {/* Interactive Direct Approval Link & Feedback */}
+                          {/* Admin Verification Notice (Normal User) & Admin Review Link (Admin Only) */}
                           {isPending && (
-                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-2 border-t border-amber-500/20">
-                              <div className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300 font-medium">
-                                <LucideIcons.Clock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                                <span>الوصل بانتظار التدقيق. يمكنك قبوله وتحديث الرصيد مباشرة:</span>
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2.5 border-t border-amber-500/20 bg-amber-500/5 p-3 rounded-xl">
+                              <div className="flex items-center gap-2 text-xs text-amber-800 dark:text-amber-300 font-medium">
+                                <LucideIcons.Clock className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 animate-pulse" />
+                                <span>طلب الشحن والوصل قيد مراجعة وتدقيق الإدارة المالية — سيتم إضافة الرصيد لحسابك فور الاعتماد.</span>
                               </div>
-                              <Button
-                                size="sm"
-                                disabled={approvingTransactionId === transaction.id}
-                                onClick={() => handleApproveReceipt(transaction)}
-                                className="h-8 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl gap-1.5 shadow-sm transition-all"
-                              >
-                                {approvingTransactionId === transaction.id ? (
-                                  <>
-                                    <LucideIcons.Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    <span>جاري اعتماد الوصل...</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <LucideIcons.CheckCheck className="h-3.5 w-3.5" />
-                                    <span>قبول الوصل وتحديث الرصيد (+{transaction.amount.toLocaleString()} DA)</span>
-                                  </>
-                                )}
-                              </Button>
+                              {isAdmin && (
+                                <Link href={`/admin/dashboard?section=topup-management&requestId=${encodeURIComponent(transaction.transactionCode || transaction.id)}`}>
+                                  <Button
+                                    size="sm"
+                                    className="h-8 text-xs font-bold bg-primary hover:bg-primary/90 text-primary-foreground rounded-xl gap-1.5 shadow-sm transition-all whitespace-nowrap"
+                                  >
+                                    <LucideIcons.ExternalLink className="h-3.5 w-3.5" />
+                                    <span>تدقيق واعتماد في لوحة المشرف</span>
+                                  </Button>
+                                </Link>
+                              )}
                             </div>
                           )}
 

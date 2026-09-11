@@ -35,8 +35,16 @@ export function ProductManagementSection() {
     variant: 'warning',
   });
 
-  const loadData = () => {
+  const loadData = async () => {
     setProducts(adminDataService.getProducts());
+    try {
+      const dbProducts = await adminDataService.fetchProductsFromDb();
+      if (dbProducts && dbProducts.length > 0) {
+        setProducts(dbProducts);
+      }
+    } catch (e) {
+      console.warn('Error loading products from DB:', e);
+    }
   };
 
   useEffect(() => {

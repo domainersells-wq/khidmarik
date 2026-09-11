@@ -48,7 +48,8 @@ import {
   ChevronDown,
   Layers,
   Truck,
-  Wallet
+  Wallet,
+  CreditCard
 } from 'lucide-react';
 import { useLanguage } from '@/context/LanguageContext';
 import { useAuth } from '@/context/AuthContext';
@@ -118,6 +119,7 @@ export const navGroups: NavGroupDef[] = [
   {
     groupTitle: 'Financial Hub',
     items: [
+      { href: 'subscription-management', label: 'Subscriptions & Plans', translationKey: 'subscriptionManagement', icon: CreditCard, requiredPermission: 'manage_payments' },
       { href: 'topup-management', label: 'Top-Up Requests', translationKey: 'topupManagement', icon: Wallet, requiredPermission: 'manage_payments' },
       { href: 'payment-management', label: 'Payments', translationKey: 'paymentManagement', icon: DollarSign, requiredPermission: 'manage_payments' },
       { href: 'transaction-ledger', label: 'Transactions', translationKey: 'transactionLedger', icon: Receipt, requiredPermission: 'manage_payments' },
